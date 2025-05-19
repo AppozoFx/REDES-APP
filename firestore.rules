@@ -1,0 +1,17 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      // Permite lectura si:
+      // (1) el usuario está autenticado, O
+      // (2) la solicitud viene de la cuenta de servicio específica
+      allow read: if request.auth != null 
+                  || request.auth.token.email == 'sheets-access@redesmyd-f8616.iam.gserviceaccount.com';
+
+      // Permite escritura solo a usuarios autenticados (como estaba antes)
+      allow write: if request.auth != null;
+    }
+  }
+}
+
+
