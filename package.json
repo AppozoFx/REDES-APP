@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "next build && xcopy .next functions\\.next /E /I /Y && xcopy public functions\\public /E /I /Y",
     "start": "next start",
     "lint": "next lint"
   },
