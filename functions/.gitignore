@@ -1,0 +1,6 @@
+node_modules/
+*.local
+
+# Ignorar archivos de entorno backend
+.env
+.env.*
