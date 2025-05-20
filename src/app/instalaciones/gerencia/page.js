@@ -191,18 +191,19 @@ export default function InstalacionesGerencia() {
   
 
   return (
-    <div className="h-full w-full flex flex-col overflow-hidden">
+    <div className="h-full w-full flex flex-col overflow-hidden bg-white dark:bg-[#0f172a] text-gray-900 dark:text-slate-100">
+
       <h2 className="text-2xl font-bold text-center text-[#30518c]">Instalaciones - Gerencia</h2>
       <p className="text-center text-shadow-md"><span className="text-[#30518c] font-bold text-2xl tracking-widest">🕒 Hora actual: {horaActual.format("HH:mm:ss")}</span></p>
 
       <div className="flex flex-wrap justify-center gap-2 text-xs font-semibold text-center text-gray-700 mt-4 mb-6">
-  <div className="bg-gray-100 px-3 py-2 rounded">Total: {instalacionesFiltradas.length}</div>
-  <div className="bg-red-100 px-3 py-2 rounded">📌 Fuera de tolerancia: {totalFueraTolerancia}</div>
-  <div className="bg-red-200 px-3 py-2 rounded">🛠️ Sin gestión: {totalSinGestion}</div>
-  <div className="bg-yellow-100 px-3 py-2 rounded">📞 No se llamó: {totalNoLlamo}</div>
-  <div className="bg-green-100 px-3 py-2 rounded">✅ Contestó: {totalContesto}</div>
-  <div className="bg-orange-100 px-3 py-2 rounded">❌ No contestó: {totalNoContesto}</div>
-  <div className="bg-gray-200 px-3 py-2 rounded">📋 No se registró: {totalNoRegistro}</div>
+  <div className="bg-gray-100 dark:bg-gray-800 dark:text-white px-3 py-2 rounded">Total: {instalacionesFiltradas.length}</div>
+  <div className="bg-gray-100 dark:bg-gray-800 dark:text-white px-3 py-2 rounded">📌 Fuera de tolerancia: {totalFueraTolerancia}</div>
+  <div className="bg-gray-100 dark:bg-gray-800 dark:text-white px-3 py-2 rounded">🛠️ Sin gestión: {totalSinGestion}</div>
+  <div className="bg-gray-100 dark:bg-gray-800 dark:text-white px-3 py-2 rounded">📞 No se llamó: {totalNoLlamo}</div>
+  <div className="bg-gray-100 dark:bg-gray-800 dark:text-white px-3 py-2 rounded">✅ Contestó: {totalContesto}</div>
+  <div className="bg-gray-100 dark:bg-gray-800 dark:text-white px-3 py-2 rounded">❌ No contestó: {totalNoContesto}</div>
+  <div className="bg-gray-100 dark:bg-gray-800 dark:text-white px-3 py-2 rounded">📋 No se registró: {totalNoRegistro}</div>
 </div>
 
       <div className="text-center text-sm text-gray-700 mt-2 mb-4">
@@ -211,11 +212,11 @@ export default function InstalacionesGerencia() {
       </div>
 
       <div className="flex flex-wrap gap-4 justify-center mb-6">
-        <input type="date" value={filtros.fecha} onChange={(e) => setFiltros({ ...filtros, fecha: e.target.value })} className="px-4 py-2 border rounded-md" />
+        <input type="date" value={filtros.fecha} onChange={(e) => setFiltros({ ...filtros, fecha: e.target.value })} className="px-4 py-2 border rounded-md bg-white dark:bg-gray-800 dark:text-white border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-orange-400" />
         <select
   value={filtros.gestor}
   onChange={(e) => setFiltros({ ...filtros, gestor: e.target.value })}
-  className="px-4 py-2 border rounded-md"
+  className="px-4 py-2 border rounded-md bg-white dark:bg-gray-800 dark:text-white border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-orange-400"
 >
   <option value="">Todos los gestores</option>
   {gestoresUnicos.map(g => (
@@ -226,7 +227,7 @@ export default function InstalacionesGerencia() {
 <select
   value={filtros.coordinador}
   onChange={(e) => setFiltros({ ...filtros, coordinador: e.target.value })}
-  className="px-4 py-2 border rounded-md"
+  className="px-4 py-2 border rounded-md bg-white dark:bg-gray-800 dark:text-white border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-orange-400"
 >
   <option value="">Todos los coordinadores</option>
   {coordinadoresUnicos.map(c => (
@@ -237,7 +238,7 @@ export default function InstalacionesGerencia() {
         <select
   value={filtros.tramo}
   onChange={(e) => setFiltros({ ...filtros, tramo: e.target.value })}
-  className="px-4 py-2 border rounded-md"
+  className="px-4 py-2 border rounded-md bg-white dark:bg-gray-800 dark:text-white border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-orange-400"
 >
   <option value="">Todos los tramos</option>
   <option value="08:00">Primer Tramo</option>
@@ -245,7 +246,7 @@ export default function InstalacionesGerencia() {
   <option value="16:00">Tercer Tramo</option>
 </select>
 
-        <select value={filtros.estado} onChange={(e) => setFiltros({ ...filtros, estado: e.target.value })} className="px-4 py-2 border rounded-md">
+        <select value={filtros.estado} onChange={(e) => setFiltros({ ...filtros, estado: e.target.value })} className="px-4 py-2 border rounded-md bg-white dark:bg-gray-800 dark:text-white border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-orange-400">
           <option value="">Todos los estados</option>
           <option value="Agendada">Agendada</option>
           <option value="En camino">En camino</option>
@@ -255,14 +256,14 @@ export default function InstalacionesGerencia() {
           <option value="Iniciada">Iniciada</option>
           <option value="Regestión">Regestión</option>
         </select>
-        <select value={filtros.estadoLlamada} onChange={(e) => setFiltros({ ...filtros, estadoLlamada: e.target.value })} className="px-4 py-2 border rounded-md">
+        <select value={filtros.estadoLlamada} onChange={(e) => setFiltros({ ...filtros, estadoLlamada: e.target.value })} className="px-4 py-2 border rounded-md bg-white dark:bg-gray-800 dark:text-white border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-orange-400">
           <option value="">Todos los estados de llamada</option>
           <option value="Contesto">Contesto</option>
           <option value="No Contesto">No Contesto</option>
           <option value="No se Registro">No se Registro</option>
           <option value="noLlamo">📞 No se llamó</option>
         </select>
-        <select value={filtros.alerta} onChange={(e) => setFiltros({ ...filtros, alerta: e.target.value })} className="px-4 py-2 border rounded-md">
+        <select value={filtros.alerta} onChange={(e) => setFiltros({ ...filtros, alerta: e.target.value })} className="px-4 py-2 border rounded-md bg-white dark:bg-gray-800 dark:text-white border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-orange-400">
           <option value="">Todas las alertas</option>
           <option value="tolerancia">📌 Fuera de tolerancia</option>
           <option value="sinaction">💤 Sin gestión</option>
@@ -288,10 +289,11 @@ export default function InstalacionesGerencia() {
 
 
 
-        <button
+<button
   onClick={exportarExcel}
-  className="px-4 py-2 bg-[#30518c] text-white rounded-md hover:bg-[#24406d] transition"
+  className="px-4 py-2 bg-[#30518c] text-white rounded-md hover:bg-[#24406d] transition dark:bg-blue-900 dark:hover:bg-blue-800"
 >
+
   📥 Exportar a Excel
 </button>
       </div>
@@ -303,7 +305,8 @@ export default function InstalacionesGerencia() {
    
 
         <table className="w-full text-xs md:text-sm border">
-          <thead className="bg-[#30518c] text-white sticky top-0">
+        <thead className="bg-[#30518c] dark:bg-blue-900 text-white sticky top-0">
+
             <tr>
               {['Cliente', 'Código', 'Documento', 'Cuadrilla', 'Tipo Servicio', 'Tramo', 'Estado', 'En Camino', 'Inicio', 'Fin', 'Gestor', 'Estado Llamada', 'Inicio Llamada', 'Fin Llamada', 'Observación', 'Plan', 'Dirección'].map(col => (
                 <th key={col} className="p-2 whitespace-nowrap">{col}</th>
@@ -321,13 +324,13 @@ export default function InstalacionesGerencia() {
                 <td className="p-2">{obtenerNombreTramo(inst.tramo)}</td>
                 <td className="p-2">
   <span className={`px-2 py-1 rounded-full text-xs border border-gray-300
-    ${inst.estado === "Cancelada" ? "bg-red-100 text-red-800" : ""}
-    ${inst.estado === "Iniciada" ? "bg-green-100 text-green-800" : ""}
-    ${inst.estado === "En camino" ? "bg-purple-100 text-purple-800" : ""}
-    ${inst.estado === "Finalizada" ? "bg-blue-100 text-blue-800" : ""}
-    ${inst.estado === "Reprogramada" ? "bg-yellow-100 text-yellow-800" : ""}
-    ${inst.estado === "Agendada" ? "bg-orange-100 text-orange-800" : ""}
-    ${inst.estado === "Regestión" ? "bg-gray-200 text-gray-800" : ""}
+    ${inst.estado === "Cancelada" ? "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-300" : ""}
+    ${inst.estado === "Iniciada" ? "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-300" : ""}
+    ${inst.estado === "En camino" ? "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-300" : ""}
+    ${inst.estado === "Finalizada" ? "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-300" : ""}
+    ${inst.estado === "Reprogramada" ? "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-300" : ""}
+    ${inst.estado === "Agendada" ? "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-300" : ""}
+    ${inst.estado === "Regestión" ? "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-300" : ""}
   `}>
     {inst.estado || "-"}
   </span>
@@ -360,7 +363,7 @@ export default function InstalacionesGerencia() {
             ))}
             {instalacionesFiltradas.length === 0 && (
               <tr>
-                <td colSpan={17} className="text-center py-4">No hay resultados con los filtros aplicados</td>
+                <td colSpan={17} className="text-center py-4 text-gray-500 dark:text-gray-400">No hay resultados con los filtros aplicados</td>
               </tr>
             )}
           </tbody>

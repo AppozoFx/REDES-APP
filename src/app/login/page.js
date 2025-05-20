@@ -8,6 +8,9 @@ import { motion } from "framer-motion";
 import { auth } from "@/firebaseConfig"; // Correcto, usa el alias
 import { Toaster, toast } from "react-hot-toast";
 import Image from "next/image";
+// 👁️ Agrega arriba junto a los imports:
+import { Eye, EyeOff } from "lucide-react"; // Asegúrate de tener 'lucide-react' instalado
+
 
 export default function Login() {
   const router = useRouter();
@@ -15,6 +18,8 @@ export default function Login() {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false); // Para la animación de éxito
+  // 👇 Agrega al comienzo del componente:
+const [showPassword, setShowPassword] = useState(false);
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -101,20 +106,30 @@ export default function Login() {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700">
-              Contraseña
-            </label>
-            <input
-              type="password"
-              className="w-full mt-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-400 dark:bg-gray-700 dark:border-gray-600 dark:text-white" // Añadido soporte dark mode
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              placeholder="••••••••"
-              aria-label="Contraseña"
-              disabled={loading || success} // Deshabilitar si está cargando o si el login fue exitoso
-            />
-          </div>
+  <label className="block text-sm font-medium text-gray-700">Contraseña</label>
+  <div className="relative">
+    <input
+      type={showPassword ? "text" : "password"}
+      value={password}
+      onChange={(e) => setPassword(e.target.value)}
+      required
+      disabled={loading || success}
+      placeholder="••••••••"
+      aria-label="Contraseña"
+      className="w-full mt-1 px-4 py-2 pr-10 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-400 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+    />
+    <button
+      type="button"
+      onClick={() => setShowPassword(!showPassword)}
+      className="absolute top-2 right-3 text-gray-500 hover:text-gray-700 dark:text-gray-300 dark:hover:text-white"
+      tabIndex={-1}
+    >
+      {showPassword ? "🙈" : "👁️"}
+
+    </button>
+  </div>
+</div>
+
 
           <button
             type="submit"

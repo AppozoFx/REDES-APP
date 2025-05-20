@@ -98,17 +98,19 @@ export default function TecnicosPage() {
       <h2 className="text-2xl font-bold mb-4 text-[#30518c]">Técnicos</h2>
 
       <input
-        type="text"
-        placeholder="Buscar por nombre"
-        value={filtro}
-        onChange={(e) => setFiltro(e.target.value)}
-        className="mb-4 px-4 py-2 border rounded-md w-full md:w-1/3 dark:bg-[#1e1e1e] dark:text-white"
-      />
+  type="text"
+  placeholder="Buscar por nombre"
+  value={filtro}
+  onChange={(e) => setFiltro(e.target.value)}
+  className="mb-4 px-4 py-2 border rounded-md w-full md:w-1/3 bg-white dark:bg-gray-800 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-orange-400"
+/>
+
 
       <div className="overflow-x-auto">
         <table className="w-full border-collapse text-sm">
           <thead>
-            <tr className="bg-[#30518c] text-white text-left sticky top-0">
+          <tr className="bg-[#30518c] dark:bg-[#1e3a8a] text-white text-left sticky top-0">
+
               <th className="p-2">DNI/CE</th>
               <th className="p-2">Nombres</th>
               <th className="p-2">Apellidos</th>
@@ -131,7 +133,7 @@ export default function TecnicosPage() {
                     <input
                       value={form.celular}
                       onChange={(e) => setForm({ ...form, celular: e.target.value })}
-                      className="w-full px-2 py-1 border rounded"
+                      className="w-full px-2 py-1 border rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-blue-500"
                     />
                   ) : (
                     t.celular || "-"
@@ -144,19 +146,20 @@ export default function TecnicosPage() {
                     <select
                       value={form.estado_usuario}
                       onChange={(e) => setForm({ ...form, estado_usuario: e.target.value })}
-                      className="w-full px-2 py-1 border rounded"
+                      className="w-full px-2 py-1 border rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-blue-500"
                     >
                       <option value="activo">activo</option>
                       <option value="inactivo">inactivo</option>
                     </select>
                   ) : (
                     <span
-                      className={`px-2 py-1 rounded text-xs font-semibold ${
-                        t.estado_usuario === "activo"
-                          ? "bg-green-100 text-green-700"
-                          : "bg-red-100 text-red-700"
-                      }`}
-                    >
+  className={`px-2 py-1 rounded text-xs font-semibold ${
+    t.estado_usuario === "activo"
+      ? "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300"
+      : "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300"
+  }`}
+>
+
                       {t.estado_usuario || "sin estado"}
                     </span>
                   )}
@@ -167,13 +170,13 @@ export default function TecnicosPage() {
                     <div className="flex gap-2">
                       <button
                         onClick={() => handleGuardar(t.id)}
-                        className="bg-green-600 text-white px-2 py-1 rounded"
+                        className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded transition"
                       >
                         Guardar
                       </button>
                       <button
                         onClick={handleCancelar}
-                        className="bg-gray-400 text-white px-2 py-1 rounded"
+                        className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded transition"
                       >
                         Cancelar
                       </button>
@@ -181,7 +184,7 @@ export default function TecnicosPage() {
                   ) : (
                     <button
                       onClick={() => handleEditar(t)}
-                      className="bg-blue-600 text-white px-2 py-1 rounded"
+                      className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded transition"
                     >
                       Editar
                     </button>

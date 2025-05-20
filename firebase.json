@@ -23,7 +23,13 @@
       "firebase.json",
       "**/.*",
       "**/node_modules/**"
-    ]
+    ],
+    "rewrites": [
+    {
+      "source": "**",
+      "function": "next"
+    }
+  ]
   },
   "storage": {
     "rules": "storage.rules"

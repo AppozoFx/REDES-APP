@@ -282,8 +282,9 @@ coordinadorCuadrilla: coordinador,
   if (!userData || cargando || !userData.rol?.some((r) => rolesPermitidos.includes(r))) return null;
 
   return (
-    <div className="p-6 w-full">
-      <div className="bg-white shadow-md rounded-xl p-6">
+    <div className="p-6 w-full dark:bg-[#0f172a] min-h-screen">
+  <div className="bg-white dark:bg-slate-800 dark:text-gray-100 shadow-md rounded-xl p-6">
+
         <h1 className="text-2xl font-bold mb-4">📥 Importar Instalaciones desde Excel</h1>
 
         <label className="block mb-2 font-medium">Seleccionar archivo</label>
@@ -291,18 +292,26 @@ coordinadorCuadrilla: coordinador,
           type="file"
           accept=".xlsx"
           onChange={handleFileUpload}
-          className="mb-4 p-2 border border-gray-300 rounded-md w-full max-w-md bg-white"
+          className="mb-4 p-2 border border-gray-300 rounded-md w-full max-w-md bg-white dark:bg-slate-700 dark:border-gray-600 dark:text-white"
         />
 
         {archivoNombre && (
           <p className="text-sm text-gray-600 mb-4">📄 <strong>Archivo:</strong> {archivoNombre}</p>
         )}
 
+{excelData.length > 0 && (
+  <p className="text-sm mb-4 text-gray-700 dark:text-gray-300">
+    Total de registros cargados: <strong>{excelData.length}</strong>
+  </p>
+)}
+
+
 <button
   disabled={excelData.length === 0 || enviando}
   onClick={() => {
     toast.custom((t) => (
-      <div className="bg-white p-4 shadow-md rounded border w-[320px]">
+      <div className="bg-white dark:bg-slate-800 text-gray-800 dark:text-gray-100 p-4 shadow-md rounded border w-[320px]">
+
         <h2 className="font-semibold text-lg text-[#30518c] mb-2">¿Confirmar importación?</h2>
         <p className="text-sm text-gray-700">¿Deseas importar las instalaciones mostradas?</p>
         <div className="flex justify-end gap-2 mt-4">
@@ -342,7 +351,8 @@ coordinadorCuadrilla: coordinador,
 
 
         {resumen && (
-          <div className="bg-white mt-6 p-4 rounded-lg border border-gray-300 shadow-md text-sm">
+          <div className="bg-white dark:bg-slate-800 mt-6 p-4 rounded-lg border border-gray-300 dark:border-gray-600 shadow-md text-sm text-gray-800 dark:text-gray-100">
+
             <p className="font-semibold text-blue-700 mb-2">📊 Resumen de importación:</p>
             <ul className="space-y-1">
               <li>👤 Usuario: <strong>{resumen.usuario}</strong></li>
@@ -361,8 +371,9 @@ coordinadorCuadrilla: coordinador,
               <br />
               E (Cliente), D (Fecha), I (Estado), N (Zona), Q (Tramo), C (TipoTraba), F (F.Soli), J (Estado), L (Zona)
             </p>
-            <table className="min-w-full border border-gray-300">
-              <thead className="bg-gray-100">
+            <table className="min-w-full border border-gray-300 dark:border-gray-600">
+  <thead className="bg-gray-100 dark:bg-slate-700">
+
                 <tr>
                   <th className="border px-2 py-1">Cliente (E)</th>
                   <th className="border px-2 py-1">Fecha (D)</th>

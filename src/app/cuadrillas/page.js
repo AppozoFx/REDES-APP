@@ -141,17 +141,18 @@ export default function CuadrillasPage() {
 
       {/* Filtros */}
       <div className="flex flex-col md:flex-row gap-4 mb-4">
-        <input
-          type="text"
-          placeholder="Buscar por nombre..."
-          value={filtroNombre}
-          onChange={(e) => setFiltroNombre(e.target.value)}
-          className="px-4 py-2 border rounded-md w-full md:w-1/3"
-        />
+      <input
+  type="text"
+  placeholder="Buscar por nombre..."
+  value={filtroNombre}
+  onChange={(e) => setFiltroNombre(e.target.value)}
+  className="px-4 py-2 border rounded-md w-full md:w-1/3 bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-orange-400"
+/>
+
         <select
           value={filtroGestor}
           onChange={(e) => setFiltroGestor(e.target.value)}
-          className="px-4 py-2 border rounded-md w-full md:w-1/3"
+          className="px-4 py-2 border rounded-md w-full md:w-1/3 bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-orange-400"
         >
           <option value="">Todos los Gestores</option>
           {gestoresUnicos.map((g) => <option key={g}>{g}</option>)}
@@ -159,7 +160,7 @@ export default function CuadrillasPage() {
         <select
           value={filtroCoordinador}
           onChange={(e) => setFiltroCoordinador(e.target.value)}
-          className="px-4 py-2 border rounded-md w-full md:w-1/3"
+          className="px-4 py-2 border rounded-md w-full md:w-1/3 bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-orange-400"
         >
           <option value="">Todos los Coordinadores</option>
           {coordinadoresUnicos.map((c) => <option key={c}>{c}</option>)}
@@ -170,7 +171,7 @@ export default function CuadrillasPage() {
       <div className="overflow-x-auto">
         <table className="w-full text-sm border-collapse">
           <thead>
-            <tr className="bg-[#30518c] text-white text-left sticky top-0">
+          <tr className="bg-[#30518c] dark:bg-[#1e3a8a] text-white text-left sticky top-0">
               <th className="p-2">Nombre</th>
               <th className="p-2">Tipo</th>
               <th className="p-2">R/C</th>
@@ -189,16 +190,22 @@ export default function CuadrillasPage() {
                 <td className="p-2">{c.nombre}</td>
                 <td className="p-2">
                   {editando === c.id ? (
-                    <select value={form.tipo} onChange={(e) => setForm({ ...form, tipo: e.target.value })}>
+                    <select value={form.tipo} onChange={(e) => setForm({ ...form, tipo: e.target.value })}
+                    className="w-full border rounded-md px-2 py-1 bg-white dark:bg-gray-700 dark:border-gray-600 dark:text-white focus:ring-2 focus:ring-blue-500"
+                    >
                       <option value="Regular">Regular</option>
                       <option value="TOP">TOP</option>
                       <option value="Alto Valor">Alto Valor</option>
                     </select>
-                  ) : c.tipo}
+                  ) : (
+                    <span className="text-sm text-gray-800 dark:text-gray-100">{c.tipo}</span>
+                  )}
                 </td>
                 <td className="p-2">
                   {editando === c.id ? (
-                    <select value={form.categoria} onChange={(e) => setForm({ ...form, categoria: e.target.value })}>
+                    <select value={form.categoria} onChange={(e) => setForm({ ...form, categoria: e.target.value })}
+                    className="border px-2 py-1 rounded-md w-full bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-blue-500"
+                    >
                       <option value="Condominio">Condominio</option>
                       <option value="Residencial">Residencial</option>
                     </select>
@@ -206,24 +213,35 @@ export default function CuadrillasPage() {
                 </td>
                 <td className="p-2">
                   {editando === c.id ? (
-                    <select value={form.zona} onChange={(e) => setForm({ ...form, zona: e.target.value })}>
+                    <select value={form.zona} onChange={(e) => setForm({ ...form, zona: e.target.value })}
+                    className="border px-2 py-1 rounded-md w-full bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-blue-500"
+                    >
                       {zonas.map((z, i) => <option key={i} value={z.zona}>{z.zona}</option>)}
                     </select>
                   ) : (c.zona || "-")}
                 </td>
                 <td className="p-2">{editando === c.id ? (
-                  <input value={form.placa} onChange={(e) => setForm({ ...form, placa: e.target.value })} />
+                  <input
+                  value={form.placa}
+                  onChange={(e) => setForm({ ...form, placa: e.target.value })}
+                  className="border px-2 py-1 rounded-md w-full bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-blue-500"
+                />
+                
                 ) : c.placa}</td>
                 <td className="p-2">
                   {editando === c.id ? (
-                    <select value={form.gestor} onChange={(e) => setForm({ ...form, gestor: e.target.value })}>
+                    <select value={form.gestor} onChange={(e) => setForm({ ...form, gestor: e.target.value })}
+                    className="border px-2 py-1 rounded-md w-full bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-blue-500"
+                    >
                       {gestores.map(g => <option key={g.id} value={g.id}>{g.nombres}</option>)}
                     </select>
                   ) : c.gestorNombre}
                 </td>
                 <td className="p-2">
                   {editando === c.id ? (
-                    <select value={form.coordinador} onChange={(e) => setForm({ ...form, coordinador: e.target.value })}>
+                    <select value={form.coordinador} onChange={(e) => setForm({ ...form, coordinador: e.target.value })}
+                    className="border px-2 py-1 rounded-md w-full bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-blue-500"
+                    >
                       {coordinadores.map(co => <option key={co.id} value={co.id}>{co.nombres}</option>)}
                     </select>
                   ) : c.coordinadorNombre}
@@ -254,14 +272,19 @@ export default function CuadrillasPage() {
                 </td>
                 <td className="p-2">
                   {editando === c.id ? (
-                    <select value={form.estado} onChange={(e) => setForm({ ...form, estado: e.target.value })}>
+                    <select value={form.estado} onChange={(e) => setForm({ ...form, estado: e.target.value })}
+                    className="border px-2 py-1 rounded-md w-full bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-blue-500"
+                    >
                       <option value="activo">activo</option>
                       <option value="inactivo">inactivo</option>
                     </select>
                   ) : (
                     <span className={`px-2 py-1 rounded text-xs font-semibold ${
-                      c.estado === "activo" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"
-                    }`}>
+                        c.estado === "activo"
+                          ? "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300"
+                          : "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300"
+                      }`}>
+                      
                       {c.estado}
                     </span>
                   )}
@@ -270,15 +293,19 @@ export default function CuadrillasPage() {
   {["TI", "Gerencia", "RRHH", "Almacén", "Gestor"].some(r => userData?.rol?.includes(r)) ? (
     editando === c.id ? (
       <>
-        <button onClick={() => handleGuardar(c.id)} className="bg-green-600 text-white px-2 rounded">
+        <button onClick={() => handleGuardar(c.id)} className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded-md transition">
           Guardar
         </button>
-        <button onClick={handleCancelar} className="bg-gray-400 text-white px-2 rounded">
+        <button onClick={handleCancelar} className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded-md transition">
           Cancelar
         </button>
       </>
     ) : (
-      <button onClick={() => handleEditar(c.id)} className="bg-blue-600 text-white px-2 rounded">
+        <button
+        onClick={() => handleEditar(c.id)}
+        className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded-md transition"
+      >
+      
         Editar
       </button>
     )

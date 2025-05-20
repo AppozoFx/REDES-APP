@@ -18,26 +18,26 @@ export default function NotificacionListener() {
     hoy.setHours(0, 0, 0, 0);
 
     const q = query(
-      collection(db, "notificaciones"),
-      where("fecha", ">=", serverTimestamp()),
-      orderBy("fecha", "desc")
-    );
+        collection(db, "notificaciones"),
+        where("fecha", ">=", hoy), // ✅ CORRECTO: usamos objeto Date real
+        orderBy("fecha", "desc")
+      );
 
     const unsub = onSnapshot(q, (snapshot) => {
       snapshot.docChanges().forEach((change) => {
         const data = change.doc.data();
 
-        // Mostrar solo si no fue leída
+        // ✅ Mostrar solo si es una nueva y no fue leída
         if (change.type === "added" && !data.leida) {
-          setNotificacion({
-            visible: true,
-            mensaje: data.mensaje || "Nueva notificación",
-            tipo: data.tipo === "Liquidación" ? "exito" : "info"
-          });
+            setNotificacion({
+              visible: true,
+              mensaje: data.mensaje || "Nueva notificación",
+              tipo: data.tipo === "Liquidación" ? "exito" : "info",
+            });
 
-          // Marcar como leída
+          // ✅ Marcar como leída para no mostrarla de nuevo
           updateDoc(doc(db, "notificaciones", change.doc.id), {
-            leida: true
+            leida: true,
           });
         }
       });

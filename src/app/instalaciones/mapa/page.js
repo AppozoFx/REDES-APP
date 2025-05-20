@@ -122,7 +122,8 @@ export default function MapaInstalaciones() {
   
 
   return (
-    <div className="p-4 h-full flex flex-col pb-4">
+    <div className="p-4 h-full flex flex-col pb-4 bg-white text-gray-900 dark:bg-[#0f172a] dark:text-gray-100">
+
       <h1 className="text-2xl font-bold mb-4">Mapa de Instalaciones</h1>
 
       {/* Filtros */}
@@ -133,7 +134,7 @@ export default function MapaInstalaciones() {
           type="date"
           value={fechaFiltro}
           onChange={(e) => setFechaFiltro(e.target.value)}
-          className="border px-3 py-2 rounded"
+          className="border px-3 py-2 rounded bg-white dark:bg-gray-800 dark:text-white dark:border-gray-600"
         />
 
 
@@ -143,7 +144,7 @@ export default function MapaInstalaciones() {
   placeholder="Buscar cuadrilla..."
   value={filtroCuadrilla}
   onChange={(e) => setFiltroCuadrilla(e.target.value)}
-  className="border px-3 py-2 rounded w-64"
+  className="border px-3 py-2 rounded bg-white dark:bg-gray-800 dark:text-white dark:border-gray-600"
 />
 
 <datalist id="lista-cuadrillas">
@@ -156,7 +157,7 @@ export default function MapaInstalaciones() {
         <select
           value={filtroEstado}
           onChange={(e) => setFiltroEstado(e.target.value)}
-          className="border px-3 py-2 rounded w-48"
+          className="border px-3 py-2 rounded bg-white dark:bg-gray-800 dark:text-white dark:border-gray-600"
         >
           <option value="">Todos los estados</option>
           <option value="Finalizada">Finalizada</option>
@@ -211,7 +212,8 @@ export default function MapaInstalaciones() {
                   icon={createCircleIcon(colorByEstado[i.estado] || colorByEstado["default"])}
                 >
                   <Popup maxWidth={300}>
-                  <div className="text-xs space-y-1">
+                  <div className="text-xs space-y-1 text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800 p-2 rounded">
+
   <p><strong>Cuadrilla:</strong> {i.cuadrillaNombre || i.cuadrilla || "No definido"}</p>
   <p><strong>Estado:</strong> {i.estado || "No definido"}</p>
   <p><strong>Tramo:</strong> {i.tramo || "No definido"}</p>
@@ -226,7 +228,8 @@ export default function MapaInstalaciones() {
   href={`https://www.google.com/maps/search/?api=1&query=${i.coordenadas.lat},${i.coordenadas.lng}`}
   target="_blank"
   rel="noopener noreferrer"
-  className="bg-blue-600 px-4 py-2 rounded hover:bg-blue-700 text-sm text-center"
+  className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-2 rounded text-sm text-center"
+
   style={{ color: "white", fontWeight: "600", textDecoration: "none" }}
 >
   Abrir en Google Maps

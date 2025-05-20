@@ -1,4 +1,3 @@
-// components/ui/input.jsx
 import React from "react";
 import clsx from "clsx";
 

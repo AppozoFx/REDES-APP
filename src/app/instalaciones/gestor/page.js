@@ -199,18 +199,19 @@ export default function InstalacionesGestor() {
   };
   
   return (
-    <div className="h-full w-full flex flex-col overflow-hidden">
+    <div className="h-full w-full flex flex-col overflow-hidden bg-white dark:bg-[#0f172a] text-gray-900 dark:text-gray-100">
+
       <div className="sticky top-0 z-10 bg-white dark:bg-[#0f0f0f] pb-3">
         <h2 className="text-3xl font-bold text-[#30518c] mb-2 text-center">Llamadas de INCONCERT</h2>
         <p className="text-center text-sm text-gray-600 mb-4">* Las horas deben ingresarse en formato <strong>24 horas</strong> (Ejemplo: 14:30)</p>
         <p className="text-center text-sm text-gray-600 mb-4"> <span className="text-[#30518c] font-bold text-2xl tracking-widest">🕒 Hora actual: {horaActual}</span></p>
 
         <div className="flex flex-wrap justify-center gap-2 text-xs font-semibold text-center text-gray-700 mt-4 mb-6">
-          <div className="bg-gray-100 px-3 py-2 rounded">Total del día: {totalInstalacionesDelDia}</div>
-          <div className="bg-yellow-100 px-3 py-2 rounded">📞 No se llamó: {totalNoLlamo}</div>
-          <div className="bg-green-100 px-3 py-2 rounded">✅ Contestó: {totalContesto}</div>
-          <div className="bg-orange-100 px-3 py-2 rounded">❌ No contestó: {totalNoContesto}</div>
-          <div className="bg-gray-200 px-3 py-2 rounded">📋 No se registró: {totalNoRegistro}</div>
+        <div className="bg-gray-100 dark:bg-gray-800 dark:text-white px-3 py-2 rounded">Total del día: {totalInstalacionesDelDia}</div>
+          <div className="dark:bg-yellow-900 dark:text-yellow-300 px-3 py-2 rounded">📞 No se llamó: {totalNoLlamo}</div>
+          <div className="dark:bg-green-900 dark:text-green-300 px-3 py-2 rounded">✅ Contestó: {totalContesto}</div>
+          <div className="dark:bg-orange-900 dark:text-orange-300 px-3 py-2 rounded">❌ No contestó: {totalNoContesto}</div>
+          <div className="dark:bg-gray-700 dark:text-gray-200 px-3 py-2 rounded">📋 No se registró: {totalNoRegistro}</div>
         </div>
 
         <div className="flex flex-wrap items-center justify-center gap-4 mb-6">
@@ -218,20 +219,20 @@ export default function InstalacionesGestor() {
             type="date"
             value={filtros.fecha}
             onChange={(e) => setFiltros({ ...filtros, fecha: e.target.value })}
-            className="px-4 py-2 border rounded-md"
+            className="px-4 py-2 border rounded-md bg-white dark:bg-gray-800 dark:text-white border-gray-300 dark:border-gray-600"
           />
           <input
             type="text"
             placeholder="Buscar cliente..."
             value={filtros.cliente}
             onChange={(e) => setFiltros({ ...filtros, cliente: e.target.value })}
-            className="px-4 py-2 border rounded-md"
+            className="px-4 py-2 border rounded-md bg-white dark:bg-gray-800 dark:text-white border-gray-300 dark:border-gray-600"
           />
           
           <select
             value={filtros.tramo}
             onChange={(e) => setFiltros({ ...filtros, tramo: e.target.value })}
-            className="px-4 py-2 border rounded-md"
+            className="px-4 py-2 border rounded-md bg-white dark:bg-gray-800 dark:text-white border-gray-300 dark:border-gray-600"
           >
             <option value="">Todos los tramos</option>
             <option value="08:00">Primer Tramo</option>
@@ -242,7 +243,7 @@ export default function InstalacionesGestor() {
           <select
             value={filtros.coordinador}
             onChange={(e) => setFiltros({ ...filtros, coordinador: e.target.value })}
-            className="px-4 py-2 border rounded-md"
+            className="px-4 py-2 border rounded-md bg-white dark:bg-gray-800 dark:text-white border-gray-300 dark:border-gray-600"
           >
             <option value="">Todos los coordinadores</option>
             {coordinadoresUnicos.map(c => (
@@ -253,7 +254,7 @@ export default function InstalacionesGestor() {
           <select
             value={filtros.estado}
             onChange={(e) => setFiltros({ ...filtros, estado: e.target.value })}
-            className="px-4 py-2 border rounded-md"
+            className="px-4 py-2 border rounded-md bg-white dark:bg-gray-800 dark:text-white border-gray-300 dark:border-gray-600"
           >
             <option value="">Todos los estados</option>
             <option value="Agendada">Agendada</option>
@@ -268,7 +269,7 @@ export default function InstalacionesGestor() {
           <select
             value={filtros.gestor}
             onChange={(e) => setFiltros({ ...filtros, gestor: e.target.value })}
-            className="px-4 py-2 border rounded-md"
+            className="px-4 py-2 border rounded-md bg-white dark:bg-gray-800 dark:text-white border-gray-300 dark:border-gray-600"
           >
             <option value="">Todos los gestores</option>
             {gestoresUnicos.map(g => (
@@ -282,7 +283,7 @@ export default function InstalacionesGestor() {
             placeholder="Buscar cuadrilla..."
             value={filtros.cuadrilla || ""}
             onChange={(e) => setFiltros({ ...filtros, cuadrilla: e.target.value })}
-            className="px-4 py-2 border rounded-md"
+            className="px-4 py-2 border rounded-md bg-white dark:bg-gray-800 dark:text-white border-gray-300 dark:border-gray-600"
           />
           <datalist id="lista-cuadrillas">
             {[...new Set(instalaciones.map(i => i.cuadrillaNombre).filter(Boolean))].map((nombre, idx) => (
@@ -294,7 +295,7 @@ export default function InstalacionesGestor() {
           <select 
             value={filtros.estadoLlamada} 
             onChange={(e) => setFiltros({ ...filtros, estadoLlamada: e.target.value })} 
-            className="px-4 py-2 border rounded-md"
+            className="px-4 py-2 border rounded-md bg-white dark:bg-gray-800 dark:text-white border-gray-300 dark:border-gray-600"
           >
             <option value="">Todos los estados de llamada</option>
             <option value="Contesto">Contesto</option>
@@ -308,7 +309,8 @@ export default function InstalacionesGestor() {
       <div className="flex-1 overflow-auto">
         {/* ... (resto de tu tabla, que ya usa `instalacionesFiltradas`) ... */}
         <table className="w-full text-xs md:text-sm border-collapse">
-          <thead className="bg-[#30518c] text-white text-sm font-semibold sticky top-0">
+        <thead className="bg-[#30518c] dark:bg-blue-900 text-white text-sm font-semibold sticky top-0">
+
             <tr>
               {['Cliente', 'Código', 'Documento', 'Plan', 'Dirección', 'Teléfono', 'Cuadrilla', 'Gestor', 'Tipo Servicio', 'Tramo', 'Estado', 'Inicio Llamada', 'Fin Llamada', 'Estado Llamada', 'Observación', 'Acciones'].map((col) => (
                 <th key={col} className="p-2 whitespace-nowrap">{col}</th>
@@ -339,18 +341,18 @@ export default function InstalacionesGestor() {
                   {obtenerNombreTramo(inst.tramo)}
                 </td>
                 <td className="p-2 whitespace-normal max-w-[250px]">
-                  <span className={`px-2 py-1 rounded-full text-xs ${inst.estado === "Cancelada" ? "bg-red-100 text-red-800" : inst.estado === "Finalizada" ? "bg-green-100 text-green-800" : "bg-gray-100 text-gray-800"}`}>
+                  <span className={`px-2 py-1 rounded-full text-xs ${inst.estado === "Cancelada" ? "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-300" : inst.estado === "Finalizada" ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300" : "bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200"}`}>
                     {inst.estado || "-"}
                   </span>
                 </td>
                 <td className="p-2 whitespace-normal max-w-[250px]">{editandoId === inst.id ? (
-                  <input type="time" value={form.horaInicioLlamada || ""} onChange={(e) => setForm({ ...form, horaInicioLlamada: e.target.value })} className="border border-black px-2 py-1 rounded w-full" />
+                  <input type="time" value={form.horaInicioLlamada || ""} onChange={(e) => setForm({ ...form, horaInicioLlamada: e.target.value })}  className="border px-2 py-1 rounded w-full bg-white dark:bg-gray-800 dark:text-white border-gray-300 dark:border-gray-600" />
                 ) : inst.horaInicioLlamada || '-'}</td>
                 <td className="p-2 whitespace-normal max-w-[250px]">{editandoId === inst.id ? (
-                  <input type="time" value={form.horaFinLlamada || ""} onChange={(e) => setForm({ ...form, horaFinLlamada: e.target.value })} className="border border-black px-2 py-1 rounded w-full" />
+                  <input type="time" value={form.horaFinLlamada || ""} onChange={(e) => setForm({ ...form, horaFinLlamada: e.target.value })}  className="border px-2 py-1 rounded w-full bg-white dark:bg-gray-800 dark:text-white border-gray-300 dark:border-gray-600" />
                 ) : inst.horaFinLlamada || '-'}</td>
                 <td className="p-2 whitespace-normal max-w-[250px]">{editandoId === inst.id ? (
-                  <select value={form.estadoLlamada || ""} onChange={(e) => setForm({ ...form, estadoLlamada: e.target.value })} className="border border-black px-2 py-1 rounded w-full">
+                  <select value={form.estadoLlamada || ""} onChange={(e) => setForm({ ...form, estadoLlamada: e.target.value })}  className="border px-2 py-1 rounded w-full bg-white dark:bg-gray-800 dark:text-white border-gray-300 dark:border-gray-600">
                     <option value="">--</option>
                     <option value="Contesto">Contesto</option>
                     <option value="No Contesto">No Contesto</option>
@@ -358,7 +360,7 @@ export default function InstalacionesGestor() {
                   </select>
                 ) : inst.estadoLlamada || '-'}</td>
                 <td className="p-2 whitespace-normal max-w-[250px]">{editandoId === inst.id ? (
-                  <input type="text" value={form.observacionLlamada || ""} onChange={(e) => setForm({ ...form, observacionLlamada: e.target.value })}  className="border border-black px-2 py-1 rounded w-full" />
+                  <input type="text" value={form.observacionLlamada || ""} onChange={(e) => setForm({ ...form, observacionLlamada: e.target.value })}   className="border px-2 py-1 rounded w-full bg-white dark:bg-gray-800 dark:text-white border-gray-300 dark:border-gray-600" />
                 ) : inst.observacionLlamada || '-'}</td>
                 <td className="p-2 whitespace-normal max-w-[250px]">
                   {editandoId === inst.id ? (
@@ -374,7 +376,8 @@ export default function InstalacionesGestor() {
             ))}
             {instalacionesFiltradas.length === 0 && (
               <tr>
-                <td colSpan={16} className="text-center py-4"> {/* Actualizado colSpan a 16 */}
+                <td colSpan={16} className="text-center py-4 text-gray-600 dark:text-gray-400">
+                {/* Actualizado colSpan a 16 */}
                   No hay instalaciones para los filtros seleccionados
                 </td>
               </tr>
