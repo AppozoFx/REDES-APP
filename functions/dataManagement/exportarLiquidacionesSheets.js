@@ -1,6 +1,6 @@
 const functions = require("firebase-functions");
 const { google } = require("googleapis");
-const { GoogleAuth } = require("google-auth-library");
+const path = require("path");
 const { admin, db } = require("../utils/firebaseAdmin");
 
 // --- CONFIGURACIÓN ---
@@ -8,6 +8,15 @@ const SPREADSHEET_ID = "1pCNR30_UTvmwUUNpqi5tSeuU38Qugt6OfNMA0ZtYSVo";
 const SHEET_NAME = "Instalaciones-Liquidadas";
 const TIME_ZONE = "America/Lima";
 const LOCALE = "es-PE";
+const keyPath = path.join(__dirname, "../../clave-sheets/redesmyd-f8616-4995757c96d5.json");
+// --- Autenticación con Google Sheets API ---
+
+const auth = new google.auth.GoogleAuth({
+  keyFile: keyPath,
+  scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+});
+
+const sheets = google.sheets({ version: "v4", auth });
 
 // --- Función para formatear fechas ---
 function formatFechaInstalacion(fecha) {
@@ -44,29 +53,40 @@ function parseDateString(dateStr) {
   );
 }
 
-exports.exportarLiquidacionesASheetsLogic = functions.https.onCall(async (data, context) => {
+exports.exportarLiquidacionesASheets = functions.https.onCall(async (data, context) => {
   try {
-    const authClient = new GoogleAuth({
-      scopes: ["https://www.googleapis.com/auth/spreadsheets"],
-    });
-    const client = await authClient.getClient();
-    const sheets = google.sheets({ version: "v4", auth: client });
 
-    functions.logger.info(`Iniciando exportación a Spreadsheet ID: ${SPREADSHEET_ID}, Hoja: "${SHEET_NAME}"`);
+    functions.logger.info("🔐 Usando autenticación con archivo .json...");
+
+
+
+    const auth = new google.auth.GoogleAuth({
+  keyFile: keyPath,
+  scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+});
+
+const sheets = google.sheets({ version: "v4", auth });
+
+    
+
+    functions.logger.info(`✅ Autenticado. Usando Spreadsheet ID: ${SPREADSHEET_ID}, Hoja: "${SHEET_NAME}"`);
+
+    // Obtener documentos de Firestore
+    functions.logger.info("📥 Consultando colección 'liquidacion_instalaciones'...");
 
     const snapshot = await db.collection("liquidacion_instalaciones").get();
 
     if (snapshot.empty) {
-      functions.logger.warn("No se encontraron documentos en la colección.");
+      functions.logger.warn("⚠️ No se encontraron documentos. Se limpiará la hoja.");
       await sheets.spreadsheets.values.clear({
         spreadsheetId: SPREADSHEET_ID,
         range: `${SHEET_NAME}!A1:ZZ`,
       });
-      functions.logger.info(`Hoja "${SHEET_NAME}" limpiada.`);
+      functions.logger.info(`🧹 Hoja "${SHEET_NAME}" limpiada por no haber datos.`);
       return { success: true, message: "No se encontraron documentos para exportar. Hoja limpiada.", count: 0 };
     }
 
-    functions.logger.info(`Se encontraron ${snapshot.size} documentos.`);
+    functions.logger.info(`📄 Se encontraron ${snapshot.size} documentos. Procesando...`);
 
     const headers = [
       "Tipo Servicio", "Fecha Instalación", "Tipo Cuadrilla", "R_C", "Cuadrilla",
@@ -105,7 +125,9 @@ exports.exportarLiquidacionesASheetsLogic = functions.https.onCall(async (data, 
       ];
     });
 
-    functions.logger.info(`Datos preparados. ${dataRows.length} filas de datos.`);
+    functions.logger.info(`✅ Datos transformados. Total filas: ${dataRows.length}`);
+
+    functions.logger.info("📊 Ordenando datos por fecha y cuadrilla personalizada...");
 
     // Orden personalizado
     const customOrderCuadrillas = [
@@ -147,7 +169,7 @@ exports.exportarLiquidacionesASheetsLogic = functions.https.onCall(async (data, 
       range: clearRange,
     });
 
-    functions.logger.info(`Escribiendo ${finalRowsToWrite.length} filas en "${SHEET_NAME}"...`);
+    functions.logger.info(`✍️ Escribiendo datos en Google Sheets (${finalRowsToWrite.length} filas)...`);
 
     await sheets.spreadsheets.values.update({
       spreadsheetId: SPREADSHEET_ID,
@@ -156,7 +178,7 @@ exports.exportarLiquidacionesASheetsLogic = functions.https.onCall(async (data, 
       resource: { values: finalRowsToWrite },
     });
 
-    functions.logger.info(`Exportación completada. ${dataRows.length} filas escritas.`);
+    functions.logger.info(`✅ Exportación completada. Registros escritos: ${dataRows.length}`);
 
     return {
       success: true,

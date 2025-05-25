@@ -5,11 +5,9 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 let genAIInstance;
 let geminiModelInstance;
 
-// 🔁 Inicializar Gemini si no está iniciado
 function initializeGemini() {
   if (geminiModelInstance) return true;
   const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-
   if (GEMINI_API_KEY) {
     try {
       genAIInstance = new GoogleGenerativeAI(GEMINI_API_KEY);
@@ -28,122 +26,94 @@ function initializeGemini() {
   }
 }
 
-// 🔎 Consulta Firestore según intención
+function obtenerNombreAutorizado(numeroWhatsapp) {
+  const mapa = {
+    "51913637815": "ARTURO",
+    "51942455307": "MIGUEL",
+    "51987334044": "JESUS",
+    "51932491185": "SUSAN",
+    "51992938625": "FRANK"
+  };
+  return mapa[numeroWhatsapp] || null;
+}
+
 async function buscarDatosEnFirestore(tipoConsulta, parametros) {
   functions.logger.info("🧠 Consulta Firestore:", tipoConsulta, JSON.stringify(parametros));
   let datosEncontrados = null;
-  let consultaRealizadaDesc = `Consulta Firestore: ${tipoConsulta}`;
-
   try {
-    if (tipoConsulta === "consultar_estado_cuadrilla" && parametros.nombre_cuadrilla) {
-      const nombreCuadrilla = parametros.nombre_cuadrilla.toUpperCase();
-      consultaRealizadaDesc = `Estado de cuadrilla: ${nombreCuadrilla}`;
-      const hoy = new Date().toISOString().split("T")[0];
-
-      const snapshot = await db
-        .collection("asistencia_cuadrillas")
-        .where("nombre", "==", nombreCuadrilla)
-        .where("fecha", "==", hoy)
-        .limit(1)
-        .get();
-
-      if (!snapshot.empty) {
-        datosEncontrados = snapshot.docs[0].data();
-      } else {
-        const snapCuad = await db
-          .collection("cuadrillas")
-          .where("nombre", "==", nombreCuadrilla)
-          .limit(1)
-          .get();
-        if (!snapCuad.empty) {
-          const data = snapCuad.docs[0].data();
-          datosEncontrados = {
-            nombre: data.nombre,
-            estado_general_cuadrilla: data.estado,
-            mensaje_adicional: `No se encontró asistencia hoy para ${data.nombre}, pero su estado general es: ${data.estado}.`,
-          };
-        }
+    if (tipoConsulta === "consultar_stock_detallado_cuadrilla") {
+      const snap = await db.collection("cuadrillas").where("nombre", "==", parametros.nombre_cuadrilla.toUpperCase()).limit(1).get();
+      if (!snap.empty) {
+        const cuadrillaId = snap.docs[0].id;
+        const stockEquipos = await db.collection(`cuadrillas/${cuadrillaId}/stock_equipos`).get();
+        datosEncontrados = stockEquipos.docs.map(doc => doc.data());
       }
-
-    } else if (tipoConsulta === "solicitar_informe_liquidaciones_cuadrilla" && parametros.nombre_cuadrilla) {
+    } else if (tipoConsulta === "contar_instalaciones_liquidadas_por_mes") {
       const nombre = parametros.nombre_cuadrilla.toUpperCase();
-      const limite = Number(parametros.cantidad_liquidaciones) || 3;
-      consultaRealizadaDesc = `Últimas ${limite} liquidaciones de ${nombre}`;
-
+      const mes = parseInt(parametros.mes);
+      const anio = parseInt(parametros.anio);
+      const primerDia = new Date(anio, mes - 1, 1);
+      const ultimoDia = new Date(anio, mes, 0, 23, 59, 59);
       const snapshot = await db
         .collection("liquidacion_instalaciones")
         .where("cuadrillaNombre", "==", nombre)
-        .orderBy("fechaLiquidacion", "desc")
-        .limit(limite)
+        .where("fechaInstalacion", ">=", primerDia)
+        .where("fechaInstalacion", "<=", ultimoDia)
         .get();
-
-      if (!snapshot.empty) {
-        datosEncontrados = snapshot.docs.map(doc => {
-          const d = doc.data();
-          return {
-            cliente: d.cliente,
-            fechaLiquidacion: d.fechaLiquidacion?.toDate().toLocaleDateString("es-PE", { timeZone: "America/Lima" }),
-            codigoCliente: d.codigoCliente,
-            estadoLiquidacion: d.estadoLiquidacion || "No especificado",
-          };
-        });
-      }
-
-    } else if (tipoConsulta === "consultar_info_tecnico_dni" && parametros.dni_tecnico) {
+      datosEncontrados = {
+        cuadrilla: nombre,
+        mes,
+        anio,
+        cantidad: snapshot.size
+      };
+    } else if (tipoConsulta === "consultar_instalaciones_por_sn") {
+      const sn = parametros.sn;
       const snapshot = await db
-        .collection("usuarios")
-        .where("dni_ce", "==", parametros.dni_tecnico)
-        .where("rol", "array-contains", "Técnico")
-        .limit(1)
+        .collection("liquidacion_instalaciones")
+        .where("snONT", "array-contains", sn)
         .get();
-
       if (!snapshot.empty) {
-        const data = snapshot.docs[0].data();
-        datosEncontrados = {
-          nombres: data.nombres,
-          apellidos: data.apellidos,
-          celular: data.celular,
-          estado_usuario: data.estado_usuario,
-        };
+        datosEncontrados = snapshot.docs.map(doc => doc.data());
+      } else {
+        datosEncontrados = null;
       }
+    } else if (tipoConsulta === "consultar_asistencia_cuadrilla") {
+      const snap = await db.collection("asistencia_cuadrillas")
+        .where("nombre", "==", parametros.nombre_cuadrilla.toUpperCase())
+        .where("fecha", "==", parametros.fecha)
+        .limit(1).get();
+      if (!snap.empty) datosEncontrados = snap.docs[0].data();
+    } else if (tipoConsulta === "consultar_asistencia_tecnico") {
+      const snap = await db.collection("asistencia_tecnicos")
+        .where("tecnicoId", "==", parametros.tecnico_id)
+        .where("fecha", "==", parametros.fecha)
+        .limit(1).get();
+      if (!snap.empty) datosEncontrados = snap.docs[0].data();
     }
-
     functions.logger.info("✅ Resultado Firestore:", JSON.stringify(datosEncontrados));
-    return { datos: datosEncontrados, consultaRealizadaDesc };
-
+    return { datos: datosEncontrados };
   } catch (error) {
-    functions.logger.error(`❌ Error consultando Firestore para ${tipoConsulta}:`, error);
-    return {
-      error: `Error interno al consultar la base de datos para ${tipoConsulta}.`,
-      consultaRealizadaDesc,
-    };
+    functions.logger.error(`❌ Error en consulta Firestore [${tipoConsulta}]:`, error);
+    return { error: `Error al consultar Firestore (${tipoConsulta})` };
   }
 }
 
-// 🤖 Procesamiento principal con Gemini
 async function procesarConGemini(userQuery, userId) {
-  if (!initializeGemini() || !geminiModelInstance) {
-    return "⚠️ El asistente IA no está disponible en este momento.";
-  }
+  const nombreUsuario = obtenerNombreAutorizado(userId);
+  if (!nombreUsuario) return "🚫 No tienes acceso autorizado al asistente de RedesMYD.";
+  if (!initializeGemini() || !geminiModelInstance) return "⚠️ El asistente IA no está disponible en este momento.";
 
-  functions.logger.info(`🧠 Consulta recibida de ${userId}: "${userQuery}"`);
-
-  // 1. Interpretación de intención
   const promptInterpretacion = `
-Analiza la siguiente consulta del usuario y clasifícala en una de estas intenciones:
-- "consultar_estado_cuadrilla"
-- "solicitar_informe_liquidaciones_cuadrilla"
-- "consultar_info_tecnico_dni"
-- "pregunta_general_redesmyd"
-
-Extrae las entidades relevantes:
-- "nombre_cuadrilla" (ej: K5)
-- "dni_tecnico" (ej: 12345678)
-- "cantidad_liquidaciones" (número)
-
-Consulta: "${userQuery}"
-
-Formato JSON:
+Eres un sistema experto en instalaciones FTTH para WIN. Interpreta la intención de esta consulta:
+"${userQuery}"
+Identifica la intención y entidades relevantes: nombre_cuadrilla, mes, anio, sn, fecha, tecnico_id.
+Opciones de intención:
+- consultar_stock_detallado_cuadrilla
+- contar_instalaciones_liquidadas_por_mes
+- consultar_instalaciones_por_sn
+- consultar_asistencia_cuadrilla
+- consultar_asistencia_tecnico
+Retorna en JSON. Ejemplo:
 {"intencion": "...", "entidades": { ... }}
   `.trim();
 
@@ -151,71 +121,64 @@ Formato JSON:
   try {
     const result = await geminiModelInstance.generateContent(promptInterpretacion);
     const raw = result.response?.text?.() || result.response?.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
-    const clean = raw.trim().replace(/^```json|```$/g, "");
-    interpretacion = JSON.parse(clean);
-    functions.logger.info("🧠 Interpretación:", JSON.stringify(interpretacion));
+    interpretacion = JSON.parse(raw.trim().replace(/^```json|```$/g, ""));
   } catch (err) {
     functions.logger.error("❌ Error interpretando intención:", err);
   }
 
-  // 2. Ejecutar acción basada en intención
-  let respuestaFinal = `Lo siento, no entendí completamente tu solicitud: "${userQuery}"`;
   let datosFirestore = null;
-  let errorFirestore = null;
-
-  if (interpretacion.intencion === "consultar_estado_cuadrilla" && interpretacion.entidades.nombre_cuadrilla) {
-    const r = await buscarDatosEnFirestore("consultar_estado_cuadrilla", {
+  if (interpretacion.intencion === "consultar_stock_detallado_cuadrilla") {
+    const r = await buscarDatosEnFirestore("consultar_stock_detallado_cuadrilla", {
+      nombre_cuadrilla: interpretacion.entidades.nombre_cuadrilla
+    });
+    datosFirestore = r.datos;
+    if (!datosFirestore) return "No se encontró stock detallado para esa cuadrilla.";
+  } else if (interpretacion.intencion === "contar_instalaciones_liquidadas_por_mes") {
+    const r = await buscarDatosEnFirestore("contar_instalaciones_liquidadas_por_mes", {
       nombre_cuadrilla: interpretacion.entidades.nombre_cuadrilla,
+      mes: interpretacion.entidades.mes,
+      anio: interpretacion.entidades.anio
     });
     datosFirestore = r.datos;
-    errorFirestore = r.error;
-    if (!datosFirestore) return errorFirestore || "No se encontró asistencia para esa cuadrilla.";
-
-  } else if (interpretacion.intencion === "solicitar_informe_liquidaciones_cuadrilla") {
-    const r = await buscarDatosEnFirestore("solicitar_informe_liquidaciones_cuadrilla", {
+    if (!datosFirestore) return "No se encontraron instalaciones liquidadas para ese periodo.";
+  } else if (interpretacion.intencion === "consultar_instalaciones_por_sn") {
+    const r = await buscarDatosEnFirestore("consultar_instalaciones_por_sn", {
+      sn: interpretacion.entidades.sn
+    });
+    datosFirestore = r.datos;
+    if (!datosFirestore) return "No se encontró información de liquidación para ese número de serie.";
+  } else if (interpretacion.intencion === "consultar_asistencia_cuadrilla") {
+    const r = await buscarDatosEnFirestore("consultar_asistencia_cuadrilla", {
       nombre_cuadrilla: interpretacion.entidades.nombre_cuadrilla,
-      cantidad_liquidaciones: interpretacion.entidades.cantidad_liquidaciones || 3,
+      fecha: interpretacion.entidades.fecha
     });
     datosFirestore = r.datos;
-    errorFirestore = r.error;
-    if (!datosFirestore || datosFirestore.length === 0) return "No se encontraron liquidaciones recientes para esa cuadrilla.";
-
-  } else if (interpretacion.intencion === "consultar_info_tecnico_dni") {
-    const r = await buscarDatosEnFirestore("consultar_info_tecnico_dni", {
-      dni_tecnico: interpretacion.entidades.dni_tecnico,
+    if (!datosFirestore) return "No se encontró asistencia para esa cuadrilla en esa fecha.";
+  } else if (interpretacion.intencion === "consultar_asistencia_tecnico") {
+    const r = await buscarDatosEnFirestore("consultar_asistencia_tecnico", {
+      tecnico_id: interpretacion.entidades.tecnico_id,
+      fecha: interpretacion.entidades.fecha
     });
     datosFirestore = r.datos;
-    errorFirestore = r.error;
-    if (!datosFirestore) return "No se encontró información para el técnico solicitado.";
+    if (!datosFirestore) return "No se encontró asistencia registrada para ese técnico.";
   }
 
-  // 3. Generar respuesta final con Gemini
-  let promptFinal = "";
-
-  if (datosFirestore) {
-    promptFinal = `
-Eres el asistente de RedesMYD. El usuario (${userId}) preguntó: "${userQuery}".
-Basándote SOLO en los datos: ${JSON.stringify(datosFirestore)},
-responde en español, claramente, sin inventar información. No especules.
-    `.trim();
-  } else {
-    promptFinal = `
-Eres un asistente de RedesMYD. El usuario (${userId}) preguntó: "${userQuery}".
-Brinda una respuesta general o solicita más detalles si es necesario.
-    `.trim();
-  }
+  const promptFinal = `
+Eres un asistente profesional de RedesMYD, empresa especializada en instalaciones FTTH para WIN.
+Usuario: ${nombreUsuario}
+Consulta: "${userQuery}"
+Datos disponibles: ${JSON.stringify(datosFirestore)}
+Responde de forma clara, profesional y sin inventar información. Si es un equipo, incluye SN, tipo, ubicación y fecha de despacho si aplica.
+  `.trim();
 
   try {
     const result = await geminiModelInstance.generateContent(promptFinal);
     const response = result.response?.text?.() || result.response?.candidates?.[0]?.content?.parts?.[0]?.text;
-    respuestaFinal = response || respuestaFinal;
+    return response || "❓ No se pudo generar una respuesta.";
   } catch (err) {
-    functions.logger.error("❌ Error generando respuesta final:", err);
-    respuestaFinal = "⚠️ No pude generar una respuesta por IA en este momento.";
+    functions.logger.error("❌ Error generando respuesta IA:", err);
+    return "⚠️ No pude generar una respuesta por IA en este momento.";
   }
-
-  functions.logger.info("📤 Respuesta final:", respuestaFinal);
-  return respuestaFinal;
 }
 
 module.exports = { procesarConGemini };

@@ -38,7 +38,10 @@ export default function ExportarLiquidacionesSheetsPage() {
     try {
       const functionsInstance = getFunctions(); 
       // Asegúrate que el nombre de la función aquí coincida exactamente con el nombre exportado en tu index.js de Cloud Functions
-      const exportarLiquidacionesASheetsFn = httpsCallable(functionsInstance, 'exportarLiquidacionesASheets'); 
+      const exportarLiquidacionesASheetsFn = httpsCallable(functionsInstance, 'exportarLiquidacionesASheets');
+
+
+ 
       
       const result = await exportarLiquidacionesASheetsFn(); // Llamar a la Cloud Function
       

@@ -26,8 +26,9 @@ exports.verificarUID = userManagementVerificarUID.verificarUIDLogic;
 const dataManagementImportar = require("./dataManagement/importarInstalaciones");
 exports.importarInstalaciones = dataManagementImportar.importarInstalacionesLogic;
 
-const dataManagementExportarSheets = require("./dataManagement/exportarLiquidacionesSheets");
-exports.exportarLiquidacionesASheets = dataManagementExportarSheets.exportarLiquidacionesASheetsLogic; // Asumiendo que tu función onCall está aquí
+const { exportarLiquidacionesASheets } = require("./dataManagement/exportarLiquidacionesSheets");
+exports.exportarLiquidacionesASheets = exportarLiquidacionesASheets;
+
 
 // --- Agente de WhatsApp ---
 const { procesarMensajeWhatsappLogic } = require("./whatsappAgent/webhookHandler");

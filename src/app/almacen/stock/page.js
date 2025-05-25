@@ -26,9 +26,15 @@ export default function DashboardStock() {
 
   // Resumen del almacén
   const resumenAlmacen = tipos.map(tipo => ({
-    tipo,
-    cantidad: equipos.filter(eq => eq.estado === "almacen" && eq.equipo === tipo).length
-  }));
+  tipo,
+  cantidad: equipos.filter(
+    eq =>
+      eq.estado === "almacen" &&
+      eq.equipo === tipo &&
+      !["avería", "pérdida", "garantía", "robo"].includes(eq.ubicacion?.toLowerCase())
+  ).length
+}));
+
 
   // Equipos filtrados por cuadrilla y estado "campo"
   const equiposCampo = equipos.filter(eq => 

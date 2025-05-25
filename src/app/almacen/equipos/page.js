@@ -96,8 +96,11 @@ const equiposParaTabla = useMemo(() => {
   // Mostrar solo los que NO sean instalados en estado ni en ubicación (si no hay filtros)
   if (!filtro && !filtroEstado && !filtroUbicacion) {
     return filtrarEquiposUnicos.filter(
-      e => e.estado !== "instalado" && e.ubicacion !== "instalado"
-    );
+  e =>
+    e.estado !== "instalado" &&
+    !["instalado", "avería", "pérdida", "garantía", "robo"].includes(e.ubicacion?.toLowerCase())
+);
+
   }
 
   // Si aplicas filtros o búsqueda, mostramos todo
