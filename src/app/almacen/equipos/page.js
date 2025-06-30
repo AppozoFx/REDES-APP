@@ -51,6 +51,7 @@ const { userData } = useAuth();
 
   const opcionesExtra = ["garantía", "avería", "robo", "pérdida"];
 
+
   // 🚀 Cargar equipos con paginación
   const cargarEquipos = async () => {
     setCargando(true);
@@ -66,6 +67,19 @@ const { userData } = useAuth();
       setCargando(false);
     }
   };
+
+  const esEquipoEnAlerta = (equipo) => {
+  if (!equipo.f_ingreso) return false;  // Si no hay fecha, no marcamos alerta.
+
+  const hoy = startOfDay(new Date());
+  const fechaIngreso = startOfDay(equipo.f_ingreso?.toDate?.() || new Date(equipo.f_ingreso));
+
+  const diasEnSistema = differenceInDays(hoy, fechaIngreso);
+
+  // ✅ Solo si estado es "campo" y supera los 15 días
+  return equipo.estado === "campo" && diasEnSistema > 15;
+};
+
 
    // 📊 Filtro simple por SN o tipo de equipo
    const filtrarEquipos = useMemo(() => {
@@ -88,24 +102,45 @@ const { userData } = useAuth();
   
   // 1️⃣ Primero este
 const filtrarEquiposUnicos = useMemo(() => {
-  return Array.from(new Map(filtrarEquipos.map((e) => [e.id, e])).values());
-}, [filtrarEquipos]);
+  const ubicacionesExcluidas = ["avería", "pérdida", "garantía", "robo"];
+
+  return Array.from(
+    new Map(
+      filtrarEquipos
+        .filter((e) => {
+          // Excluir si se está filtrando por estado (ej: "almacen") pero NO por ubicación específica
+          if (
+            filtroEstado &&
+            !filtroUbicacion &&
+            ubicacionesExcluidas.includes((e.ubicacion || "").toLowerCase())
+          ) {
+            return false;
+          }
+          return true;
+        })
+        .map((e) => [e.id, e])
+    ).values()
+  );
+}, [filtrarEquipos, filtroEstado, filtroUbicacion]);
+
 
 // 2️⃣ Luego este
 const equiposParaTabla = useMemo(() => {
   // Mostrar solo los que NO sean instalados en estado ni en ubicación (si no hay filtros)
   if (!filtro && !filtroEstado && !filtroUbicacion) {
     return filtrarEquiposUnicos.filter(
-  e =>
-    e.estado !== "instalado" &&
-    !["instalado", "avería", "pérdida", "garantía", "robo"].includes(e.ubicacion?.toLowerCase())
-);
-
+      (e) =>
+        e.estado !== "instalado" &&
+        !["instalado", "avería", "pérdida", "garantía", "robo"].includes(
+          e.ubicacion?.toLowerCase()
+        )
+    );
   }
 
   // Si aplicas filtros o búsqueda, mostramos todo
   return filtrarEquiposUnicos;
 }, [filtrarEquiposUnicos, filtro, filtroEstado, filtroUbicacion]);
+
 
 
 
@@ -165,17 +200,6 @@ const actualizarStockCuadrilla = async (nombreCuadrilla, cantidad, tipoEquipo) =
   }, []);
 
 
-const esEquipoEnAlerta = (equipo) => {
-  if (!equipo.f_ingreso) return false;  // Si no hay fecha, no marcamos alerta.
-
-  const hoy = startOfDay(new Date());
-  const fechaIngreso = startOfDay(equipo.f_ingreso?.toDate?.() || new Date(equipo.f_ingreso));
-
-  const diasEnSistema = differenceInDays(hoy, fechaIngreso);
-
-  // ✅ Solo si estado es "campo" y supera los 15 días
-  return equipo.estado === "campo" && diasEnSistema > 15;
-};
 
   
 
@@ -368,7 +392,8 @@ const guardarCambios = async (id) => {
       Cliente: e.cliente,
       "Pri-Tec": e["pri-tec"],
       "Tec-Liq": e["tec-liq"],
-      Inv: e["inv"]
+      Inv: e["inv"],
+      ProID: e.proid
     }));
   
     const ws = XLSX.utils.json_to_sheet(dataExcel);
@@ -723,20 +748,31 @@ const moverEquipoEntreCuadrillas = async (sn, equipoData, origen, destino) => {
   {esEquipoEnAlerta(e) && <span className="ml-2"></span>}
 </td>
 
-                <td className="p-2">
-                <select
-  value={editing[e.id]?.ubicacion ?? e.ubicacion ?? ""}
-  onChange={(ev) => handleChange(e.id, "ubicacion", ev.target.value)}
-  disabled={editandoId !== e.id}
-  className="border rounded px-2 py-1"
+                <td
+  className={`p-2 font-semibold ${
+    ["avería", "pérdida", "garantía", "robo"].includes((e.ubicacion ?? "").toLowerCase())
+      ? "bg-red-100 text-red-700"
+      : ""
+  }`}
 >
-  <option value="">Selecciona ubicación</option>
-  {generarOpcionesUbicacion(editing[e.id]?.ubicacion ?? e.ubicacion).map((op, idx) => (
-    <option key={`${op}-${idx}`} value={op}>{op}</option>
-  ))}
-</select>
+  <select
+    value={editing[e.id]?.ubicacion ?? e.ubicacion ?? ""}
+    onChange={(ev) => handleChange(e.id, "ubicacion", ev.target.value)}
+    disabled={editandoId !== e.id}
+    className="border rounded px-2 py-1"
+  >
+    <option value="">Selecciona ubicación</option>
+    {generarOpcionesUbicacion(editing[e.id]?.ubicacion ?? e.ubicacion).map((op, idx) => (
+      <option key={`${op}-${idx}`} value={op}>{op}</option>
+    ))}
+  </select>
 
-                </td>
+  {/* ⚠️ Icono si está en una ubicación excluida */}
+  {["avería", "pérdida", "garantía", "robo"].includes((e.ubicacion ?? "").toLowerCase()) && (
+    <span className="ml-1">⚠️</span>
+  )}
+</td>
+
                 <td className="p-2">{e.equipo}</td>
                 <td className="p-2">
                   <Input

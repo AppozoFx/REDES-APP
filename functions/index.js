@@ -26,13 +26,27 @@ exports.verificarUID = userManagementVerificarUID.verificarUIDLogic;
 const dataManagementImportar = require("./dataManagement/importarInstalaciones");
 exports.importarInstalaciones = dataManagementImportar.importarInstalacionesLogic;
 
-const { exportarLiquidacionesASheets } = require("./dataManagement/exportarLiquidacionesSheets");
-exports.exportarLiquidacionesASheets = exportarLiquidacionesASheets;
-
 
 // --- Agente de WhatsApp ---
 const { procesarMensajeWhatsappLogic } = require("./whatsappAgent/webhookHandler");
 exports.procesarMensajeWhatsapp = procesarMensajeWhatsappLogic;
+
+// --- Exportar para Power BI ---
+const {
+  exportarLiquidacionesBI,
+} = require("./dataManagement/exportarLiquidacionesBI");
+exports.exportarLiquidacionesBI = exportarLiquidacionesBI;
+
+const {
+  exportarInstalacionesBI,
+} = require("./dataManagement/exportarInstalacionesBI");
+exports.exportarInstalacionesBI = exportarInstalacionesBI;
+
+const {
+  exportarStockEquiposBI,
+} = require("./dataManagement/exportarStockEquiposBI");
+exports.exportarStockEquiposBI = exportarStockEquiposBI;
+
 
 
 // Si tienes otras funciones, impórtalas y expórtalas de manera similar
