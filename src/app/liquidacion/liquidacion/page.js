@@ -23,6 +23,11 @@ export default function LiquidacionesPage() {
   const [liquidaciones, setLiquidaciones] = useState([]);
   const [cargando, setCargando] = useState(false);
   const [ediciones, setEdiciones] = useState({});
+
+  const valorONulo = (valor) => {
+  return valor !== undefined && valor !== "" ? valor : null;
+};
+
   
 
 
@@ -62,50 +67,50 @@ export default function LiquidacionesPage() {
     });
 
     const dataExportar = liquidacionesFiltradas.map((l) => {
-        const fecha = convertirAFecha(l.fechaInstalacion);
-        const cat5 = parseNumero(l.cat5e);
-        const cat6 = parseNumero(l.cat6);
-        const puntos = cat5 + cat6;
+  const fecha = convertirAFecha(l.fechaInstalacion);
+  const cat5 = parseNumero(l.cat5e);
+  const cat6 = parseNumero(l.cat6);
+  const puntos = cat5 + cat6;
 
-        const snMESH = l.snMESH || [];
-        const snBOX = l.snBOX || [];
+  const snMESH = l.snMESH || [];
+  const snBOX = l.snBOX || [];
 
-        // 🔹 Construimos dinámicamente las columnas SN_MESH_X y SN_BOX_X
-        const meshColumns = {};
-        for (let i = 0; i < maxMesh; i++) {
-            meshColumns[`SN_MESH_${i + 1}`] = snMESH[i] || "";
-        }
+  const meshColumns = {};
+  for (let i = 0; i < maxMesh; i++) {
+    meshColumns[`SN_MESH_${i + 1}`] = valorONulo(snMESH[i]);
+  }
 
-        const boxColumns = {};
-        for (let i = 0; i < maxBox; i++) {
-            boxColumns[`SN_BOX_${i + 1}`] = snBOX[i] || "";
-        }
+  const boxColumns = {};
+  for (let i = 0; i < maxBox; i++) {
+    boxColumns[`SN_BOX_${i + 1}`] = valorONulo(snBOX[i]);
+  }
 
-        return {
-            FechaInstalacion: formatearFecha(fecha),
-            TipoCuadrilla: l.tipoCuadrilla || "",
-            TipoServicio: l.tipoServicio || "",
-            Cuadrilla: l.cuadrillaNombre || "",
-            CodigoCliente: l.codigoCliente || "",
-            documento: l.documento || "",
-            Cliente: l.cliente || "",
-            Direccion: l.direccion || "",
-            TipoZona: l.residencialCondominio || "",
-            Plan: l.plan || "",
-            SN_ONT: l.snONT || "",
-            prooid: l.proidONT || "",
-            ...meshColumns,  // 🔹 insertamos dinámicamente SN_MESH_X
-            ...boxColumns,   // 🔹 insertamos dinámicamente SN_BOX_X
-            SN_FONO: l.snFONO || "",
-            PlanGamer: l.planGamer || "",         
-            KitWifiPro: l.kitWifiPro || "",          
-            ServicioCableadoMesh: l.servicioCableadoMesh || "", 
-            Cat5e: cat5,
-            Cat6: cat6,
-            PuntosUTP: puntos,
-            Observacion: l.observacion || "",
-        };
-    });
+  return {
+    FechaInstalacion: formatearFecha(fecha),
+    TipoCuadrilla: valorONulo(l.tipoCuadrilla),
+    TipoServicio: valorONulo(l.tipoServicio),
+    Cuadrilla: valorONulo(l.cuadrillaNombre),
+    CodigoCliente: valorONulo(l.codigoCliente),
+    documento: valorONulo(l.documento),
+    Cliente: valorONulo(l.cliente),
+    Direccion: valorONulo(l.direccion),
+    TipoZona: valorONulo(l.residencialCondominio),
+    Plan: valorONulo(l.plan),
+    SN_ONT: valorONulo(l.snONT),
+    prooid: valorONulo(l.proidONT),
+    ...meshColumns,
+    ...boxColumns,
+    SN_FONO: valorONulo(l.snFONO),
+    PlanGamer: valorONulo(l.planGamer),
+    KitWifiPro: valorONulo(l.kitWifiPro),
+    ServicioCableadoMesh: valorONulo(l.servicioCableadoMesh),
+    Cat5e: cat5,
+    Cat6: cat6,
+    PuntosUTP: puntos,
+    Observacion: valorONulo(l.observacion),
+  };
+});
+
 
     const ws = XLSX.utils.json_to_sheet(dataExportar);
     const wb = XLSX.utils.book_new();
