@@ -1,44 +1,49 @@
-// NotificacionListener.jsx
 "use client";
 
-import { useEffect, useState } from "react";
-import { collection, onSnapshot, query, where, orderBy, serverTimestamp, updateDoc, doc } from "firebase/firestore";
+import { useEffect, useState, useRef } from "react";
+import { collection, onSnapshot, query, where, orderBy, updateDoc, doc } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
-import NotificacionFlotante from "./NotificacionFlotante";
 import { useAuth } from "@/app/context/AuthContext";
+import NotificacionFlotante from "./NotificacionFlotante";
 
 export default function NotificacionListener() {
   const { userData } = useAuth();
-  const [notificacion, setNotificacion] = useState({ visible: false, mensaje: "", tipo: "info" });
+  const [toast, setToast] = useState({ visible: false, mensaje: "", tipo: "info", link: null, titulo: "" });
+  const latestIdRef = useRef(null);
 
   useEffect(() => {
     if (!userData) return;
-
-    const hoy = new Date();
-    hoy.setHours(0, 0, 0, 0);
+    const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
 
     const q = query(
-        collection(db, "notificaciones"),
-        where("fecha", ">=", hoy), // ✅ CORRECTO: usamos objeto Date real
-        orderBy("fecha", "desc")
-      );
+      collection(db, "notificaciones"),
+      where("fecha", ">=", hoy),
+      orderBy("fecha", "desc")
+    );
 
-    const unsub = onSnapshot(q, (snapshot) => {
-      snapshot.docChanges().forEach((change) => {
+    const unsub = onSnapshot(q, async (snapshot) => {
+      snapshot.docChanges().forEach(async (change) => {
+        if (change.type !== "added") return;
         const data = change.doc.data();
 
-        // ✅ Mostrar solo si es una nueva y no fue leída
-        if (change.type === "added" && !data.leida) {
-            setNotificacion({
-              visible: true,
-              mensaje: data.mensaje || "Nueva notificación",
-              tipo: data.tipo === "Liquidación" ? "exito" : "info",
-            });
+        // Evita duplicados rápidos
+        if (latestIdRef.current === change.doc.id) return;
+        latestIdRef.current = change.doc.id;
 
-          // ✅ Marcar como leída para no mostrarla de nuevo
-          updateDoc(doc(db, "notificaciones", change.doc.id), {
-            leida: true,
+        if (!data.leida) {
+          setToast({
+            visible: true,
+            mensaje: data.mensaje || "Nueva notificación",
+            tipo: data.tipo === "Liquidación" ? "exito" : data.tipo === "Devolución" ? "alerta" : "info",
+            link: data.link || null,
+            titulo: data.tipo || "Notificación",
           });
+
+          try {
+            await updateDoc(doc(db, "notificaciones", change.doc.id), { leida: true });
+          } catch (e) {
+            console.error("No se pudo marcar como leída:", e);
+          }
         }
       });
     });
@@ -48,10 +53,13 @@ export default function NotificacionListener() {
 
   return (
     <NotificacionFlotante
-      visible={notificacion.visible}
-      mensaje={notificacion.mensaje}
-      tipo={notificacion.tipo}
-      onClose={() => setNotificacion({ ...notificacion, visible: false })}
+      visible={toast.visible}
+      titulo={toast.titulo}
+      mensaje={toast.mensaje}
+      tipo={toast.tipo}
+      link={toast.link}
+      onClose={() => setToast((t) => ({ ...t, visible: false }))}
+      duration={5000}
     />
   );
 }

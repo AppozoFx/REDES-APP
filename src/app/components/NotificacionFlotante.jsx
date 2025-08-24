@@ -1,66 +1,49 @@
 "use client";
-
-import { useState, useEffect } from "react";
-import { db } from "@/firebaseConfig"; // Asegúrate que la ruta sea correcta si está en /src
+import { useEffect, useState } from "react";
+import { db } from "@/firebaseConfig";
 import { collection, query, orderBy, limit, onSnapshot } from "firebase/firestore";
 import { AnimatePresence, motion } from "framer-motion";
 
 export default function NotificacionFlotante() {
-  const [nuevaNotificacion, setNuevaNotificacion] = useState(null);
+  const [toast, setToast] = useState(null);
 
   useEffect(() => {
-    const q = query(
-      collection(db, "notificaciones"),
-      orderBy("fecha", "desc"),
-      limit(1)
-    );
-
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      snapshot.docChanges().forEach(change => {
-        if (change.type === "added") {
-          const data = change.doc.data();
-          setNuevaNotificacion({
-            id: change.doc.id,
-            ...data
-          });
-
-          setTimeout(() => {
-            setNuevaNotificacion(null);
-          }, 5000);
-        }
+    const q = query(collection(db, "notificaciones"), orderBy("fecha", "desc"), limit(1));
+    const unsub = onSnapshot(q, (snap) => {
+      snap.docChanges().forEach((ch) => {
+        if (ch.type !== "added") return;
+        setToast({ id: ch.doc.id, ...ch.doc.data() });
+        const t = setTimeout(() => setToast(null), 7000);
+        return () => clearTimeout(t);
       });
     });
-
-    return () => unsubscribe();
+    return () => unsub();
   }, []);
 
   return (
     <AnimatePresence>
-      {nuevaNotificacion && (
+      {toast && (
         <motion.div
-          initial={{ opacity: 0, y: -20 }}
+          initial={{ opacity: 0, y: -16 }}
           animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -20 }}
-          // Sugerencias para Modo Oscuro:
-          className="fixed top-4 right-4 bg-white dark:bg-gray-800 shadow-lg dark:shadow-2xl border-l-4 border-blue-500 dark:border-blue-400 p-4 rounded w-80 z-50 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700"
+          exit={{ opacity: 0, y: -16 }}
+          transition={{ duration: 0.18 }}
+          className="fixed right-4 top-4 z-[60] w-[92vw] max-w-sm"
         >
-            <div className="flex items-start gap-2">
-                <span>🔔</span>
-                    <div className="flex-1">
-          <h4 className="font-bold text-blue-600 dark:text-blue-300 mb-1">{nuevaNotificacion.tipo}</h4>
-          <p className="text-sm text-gray-700 dark:text-gray-300">{nuevaNotificacion.mensaje}</p>
-          {nuevaNotificacion.link && (
-            <a
-              href={nuevaNotificacion.link}
-            
-              target="_blank"
-              // Sugerencias para Modo Oscuro:
-              className="text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 text-xs underline mt-2 inline-block"
-            >
-              Ver Comprobante
-            </a>
-          )}
-          </div>
+          <div className="relative overflow-hidden rounded-2xl border border-[color:var(--line)] bg-white/90 shadow-[0_10px_30px_var(--shadow)] backdrop-blur dark:bg-white/5">
+            <div className="absolute inset-x-0 top-0 h-1.5 bg-[color:var(--brand)]" />
+            <div className="flex items-start gap-3 px-4 py-3">
+              <div className="min-w-0 flex-1">
+                <h4 className="truncate text-sm font-semibold">{toast.tipo || "Notificación"}</h4>
+                <p className="mt-0.5 text-sm">{toast.mensaje}</p>
+                {toast.link && (
+                  <a href={toast.link} target="_blank" rel="noreferrer" className="mt-2 inline-block text-xs font-semibold text-[color:var(--brand)] underline">
+                    Ver comprobante
+                  </a>
+                )}
+              </div>
+              <button onClick={() => setToast(null)} className="rounded-md p-1 text-slate-500 hover:bg-white/60" aria-label="Cerrar">✕</button>
+            </div>
           </div>
         </motion.div>
       )}

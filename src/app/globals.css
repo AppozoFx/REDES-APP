@@ -1,10 +1,54 @@
 @import "tailwindcss";
 
+/* =========================
+   Tokens base
+========================= */
 :root {
+  /* los tuyos */
   --background: #ffffff;
   --foreground: #171717;
+    --fw-body: 500;      /* base más gruesa */
+  --fw-ui: 500;        /* navegación, labels */
+  --fw-heading: 700;   /* títulos */
+
+  /* NUEVO: variables de fuente del UI y monoespaciada */
+  --font-ui: var(--font-ui, "Plus Jakarta Sans"); /* next/font setea esta var */
+  --font-mono: var(--font-mono-ui, "JetBrains Mono");
+
+  /* paleta corporativa + UI tokens */
+  --brand: #30518c;                 /* azul institucional */
+  --accent: #ff6413;                /* acento */
+  --brand-ink: #2b3f66;
+  --brand-soft: rgba(48,81,140,.10);
+
+  --ink: #0f172a;
+  --muted-ink: #475569;
+  --line: rgba(15,23,42,.08);
+
+  --radius: 16px;
+  --shadow: 0 8px 24px rgba(2,6,23,.06);
+  --shadow-2: 0 12px 36px rgba(2,6,23,.10);
+
+  /* fondo del lienzo */
+  --canvas: linear-gradient(180deg, #f8fafc 0%, #ffffff 100%);
 }
 
+@media (prefers-color-scheme: dark) {
+  :root {
+    /* los tuyos */
+    --background: #0a0a0a;
+    --foreground: #ededed;
+
+    /* dark tokens */
+    --ink: #e5e7eb;
+    --muted-ink: #9ca3af;
+    --line: rgba(255,255,255,.12);
+    --brand-soft: rgba(48,81,140,.18);
+    --canvas: radial-gradient(1200px 600px at 10% -10%, rgba(48,81,140,.18) 0%, transparent 55%), #0b0f19;
+  }
+}
+
+/* Tailwind theme vars (si usas @theme inline) */
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -12,15 +56,81 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+@layer base {
+  body {
+    font-weight: var(--fw-body);
+    letter-spacing: 0.005em;            /* compensa el aumento de peso */
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+
+    /* Elegancia extra */
+    letter-spacing: 0.01em;
+    font-feature-settings: "ss01","cv05","cv11","tnum"; /* alternates + números tabulares */
+    font-variation-settings: "opsz" 32; /* tamaño óptico */
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+/* =========================
+   Utilidades elegantes
+========================= */
+
+/* tarjeta estándar */
+.card {
+  position: relative;
+  border-radius: var(--radius);
+  background: #fff;
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
 }
+.dark .card { background: rgba(255,255,255,.05); }
+
+/* borde degradado premium */
+.card--gradient {
+  background:
+    linear-gradient(#fff, #fff) padding-box,
+    linear-gradient(135deg, rgba(48,81,140,.35), rgba(255,100,19,.25)) border-box;
+  border: 1px solid transparent;
+}
+.dark .card--gradient {
+  background:
+    linear-gradient(rgba(255,255,255,.05), rgba(255,255,255,.05)) padding-box,
+    linear-gradient(135deg, rgba(48,81,140,.45), rgba(255,100,19,.35)) border-box;
+}
+
+/* chip elegante reutilizable */
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  border-radius: 999px; padding: 2px 8px;
+  font-size: 11px; font-weight: 600;
+  border: 1px solid var(--line);
+  background: var(--brand-soft);
+  color: var(--brand-ink);
+  box-shadow: 0 1px 0 rgba(0,0,0,.04);
+}
+
+/* puntito para chips */
+.chip-dot {
+  width: 6px; height: 6px; border-radius: 999px;
+  background: var(--brand);
+}
+
+/* skeleton shimmer */
+.skeleton { position: relative; overflow: hidden; background: #eef2f7; }
+.skeleton::after {
+  content:""; position:absolute; inset:0; transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.7), transparent);
+  animation: shimmer 1.2s infinite;
+}
+@keyframes shimmer { 100% { transform: translateX(100%); } }
+
+/* scrollbars suaves */
+.soft-scrollbar::-webkit-scrollbar { width: 8px; }
+.soft-scrollbar::-webkit-scrollbar-track { background: transparent; }
+.soft-scrollbar::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(48,81,140,.35), rgba(48,81,140,.2));
+  border-radius: 999px;
+}
+.soft-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(48,81,140,.6), rgba(48,81,140,.35));
+}
+.soft-scrollbar { scrollbar-width: thin; scrollbar-color: rgba(48,81,140,.45) transparent; }

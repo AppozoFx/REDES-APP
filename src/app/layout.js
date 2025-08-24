@@ -3,11 +3,23 @@ import "./globals.css";
 import { Toaster } from "react-hot-toast";
 import { AuthProvider } from "@/context/AuthContext";     // ✅ usa alias si ya lo definiste
 import ClientLayout from "@/components/ClientLayout";      // ✅ usa alias
+import { Plus_Jakarta_Sans, JetBrains_Mono } from "next/font/google";
 
-export const metadata = {
-  title: "RedesMYD App",
-  description: "App de asistencia, cuadrillas y almacén",
-};
+
+const jakarta = Plus_Jakarta_Sans({
+  subsets: ["latin"],
+  variable: "--font-ui",
+  display: "swap",
+  weight: ["300","400","500","600","700","800"],
+});
+
+const jetmono = JetBrains_Mono({
+  subsets: ["latin"],
+  variable: "--font-mono-ui",
+  display: "swap",
+});
+
+export const metadata = { title: "Redes M&D", description: "App" };
 
 // (Opcional) ayuda a PWA/tema
 export const viewport = {

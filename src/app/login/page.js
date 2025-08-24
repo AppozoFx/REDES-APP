@@ -206,7 +206,7 @@ export default function Login() {
 
           {/* Footer pequeño */}
           <div className="mt-6 text-center text-xs text-white/80">
-            © {new Date().getFullYear()} RedesMYD • Seguridad por sesión de pestaña
+            © {new Date().getFullYear()} RedesMYD • Desarrollado por Arturo Pozo
           </div>
         </motion.div>
       </div>
