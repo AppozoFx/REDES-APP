@@ -1,140 +1,207 @@
-// Este archivo contiene el dashboard visual con métricas + gráficos
-// Librería: Recharts (debes instalar con: npm install recharts)
-
+// src/app/dashboard/page.js
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { db } from "@/firebaseConfig";
 import { collection, getDocs } from "firebase/firestore";
 import dayjs from "dayjs";
+import { useAuth } from "@/context/AuthContext";            // ✅ usa el estado de auth
 import {
   PieChart, Pie, Cell,
   ResponsiveContainer, Tooltip, Legend
 } from "recharts";
 
 export default function Dashboard() {
+  const { user, initializing } = useAuth();                 // ✅
   const [fecha, setFecha] = useState(dayjs().format("YYYY-MM-DD"));
   const [cuadrillas, setCuadrillas] = useState([]);
   const [instalaciones, setInstalaciones] = useState([]);
+  const [cargando, setCargando] = useState(false);          // ✅ feedback de carga
+  const montado = useRef(true);                             // ✅ evita setState tras unmount
 
   useEffect(() => {
-    const fetchData = async () => {
-      const snap1 = await getDocs(collection(db, "asistencia_cuadrillas"));
-      const cuadrillasData = snap1.docs
-        .map(doc => ({ id: doc.id, ...doc.data() }))
-        .filter(c => c.fecha === fecha);
-      setCuadrillas(cuadrillasData);
+    montado.current = true;
+    return () => { montado.current = false; };
+  }, []);
 
-      const snap2 = await getDocs(collection(db, "instalaciones"));
-      const instalacionesData = snap2.docs
-        .map(doc => ({ id: doc.id, ...doc.data() }))
-        .filter(i => {
-          const fechaInstalacion = (() => {
-            if (typeof i.fechaInstalacion === "string") {
-              return dayjs(i.fechaInstalacion).format("YYYY-MM-DD");
-            } else if (i.fechaInstalacion?.toDate) {
-              return dayjs(i.fechaInstalacion.toDate()).format("YYYY-MM-DD");
-            }
-            return "";
-          })();
-          return fechaInstalacion === fecha;
-        });
-      setInstalaciones(instalacionesData);
+  useEffect(() => {
+    // ⛔ No consultar hasta que Auth esté listo y haya user
+    if (initializing || !user) return;
+
+    const fetchData = async () => {
+      try {
+        setCargando(true);
+
+        const snap1 = await getDocs(collection(db, "asistencia_cuadrillas"));
+        const cuadrillasData = snap1.docs
+          .map(doc => ({ id: doc.id, ...doc.data() }))
+          .filter(c => c.fecha === fecha);
+
+        const snap2 = await getDocs(collection(db, "instalaciones"));
+        const instalacionesData = snap2.docs
+          .map(doc => ({ id: doc.id, ...doc.data() }))
+          .filter(i => {
+            const fechaInstalacion = (() => {
+              if (typeof i.fechaInstalacion === "string") {
+                return dayjs(i.fechaInstalacion).format("YYYY-MM-DD");
+              } else if (i.fechaInstalacion?.toDate) {
+                return dayjs(i.fechaInstalacion.toDate()).format("YYYY-MM-DD");
+              }
+              return "";
+            })();
+            return fechaInstalacion === fecha;
+          });
+
+        if (!montado.current) return;
+        setCuadrillas(cuadrillasData);
+        setInstalaciones(instalacionesData);
+      } catch (err) {
+        // 👇 muy importante: No tirar el error sin manejarlo
+        console.warn("Error al leer Firestore en dashboard:", err?.code || err?.message);
+        if (!montado.current) return;
+        setCuadrillas([]);
+        setInstalaciones([]);
+      } finally {
+        if (montado.current) setCargando(false);
+      }
     };
 
     fetchData();
-  }, [fecha]);
+  }, [initializing, user, fecha]);
 
-  const cuadrillasAsistidas = cuadrillas.filter(c => c.estado?.toLowerCase() === "asistencia");
+  // ---- DERIVADOS (useMemo para no recalcular en cada render) ----
+  const cuadrillasAsistidas = useMemo(
+    () => cuadrillas.filter(c => c.estado?.toLowerCase() === "asistencia"),
+    [cuadrillas]
+  );
   const totalAsistidas = cuadrillasAsistidas.length;
 
-  const zonasConCantidad = cuadrillasAsistidas.reduce((acc, c) => {
-    const zona = c.zona || "Sin Zona";
-    acc[zona] = (acc[zona] || 0) + 1;
-    return acc;
-  }, {});
+  const zonasConCantidad = useMemo(() => (
+    cuadrillasAsistidas.reduce((acc, c) => {
+      const zona = c.zona || "Sin Zona";
+      acc[zona] = (acc[zona] || 0) + 1;
+      return acc;
+    }, {})
+  ), [cuadrillasAsistidas]);
 
-  const instalacionesFiltradas = instalaciones.filter(i => i.tipoServicio?.toLowerCase() !== "garantia");
+  const instalacionesFiltradas = useMemo(
+    () => instalaciones.filter(i => i.tipoServicio?.toLowerCase() !== "garantia"),
+    [instalaciones]
+  );
   const totalInstalaciones = instalacionesFiltradas.length;
   const finalizadasValidas = instalacionesFiltradas.filter(i => i.estado?.toLowerCase() === "finalizada").length;
   const efectividad = totalInstalaciones > 0 ? (finalizadasValidas / totalInstalaciones) * 100 : 0;
-
   const ponderado = totalAsistidas > 0 ? (finalizadasValidas / totalAsistidas) : 0;
 
-  const cuadrillasNoAsistidas = cuadrillas.filter(c => c.estado?.toLowerCase() !== "asistencia");
-  const resumenNoAsistidas = cuadrillasNoAsistidas.reduce((acc, c) => {
-    const estado = c.estado?.toLowerCase() || "otro";
-    acc[estado] = (acc[estado] || 0) + 1;
-    return acc;
-  }, {});
-
-  const estadoInstalaciones = instalaciones.reduce((acc, i) => {
-    const estado = i.estado?.toLowerCase() || "otro";
-    acc[estado] = (acc[estado] || 0) + 1;
-    return acc;
-  }, {});
-
-  const estadoInstalacionesValidas = instalacionesFiltradas.reduce((acc, i) => {
-    const estado = i.estado?.toLowerCase() || "otro";
-    acc[estado] = (acc[estado] || 0) + 1;
-    return acc;
-  }, {});
-  
-
-  const distribucionTipos = cuadrillasAsistidas.reduce((acc, c) => {
-    const tipo = c.tipo || "Otro";
-    acc[tipo] = (acc[tipo] || 0) + 1;
-    return acc;
-  }, {});
-
-  const cuadrillasResidenciales = cuadrillasAsistidas.filter(c =>
-    c.nombre?.toLowerCase().includes("residencial")
+  const cuadrillasNoAsistidas = useMemo(
+    () => cuadrillas.filter(c => c.estado?.toLowerCase() !== "asistencia"),
+    [cuadrillas]
   );
-  const cuadrillasCondominio = cuadrillasAsistidas.filter(c =>
-    c.nombre?.toLowerCase().includes("moto")
+  const resumenNoAsistidas = useMemo(() => (
+    cuadrillasNoAsistidas.reduce((acc, c) => {
+      const estado = c.estado?.toLowerCase() || "otro";
+      acc[estado] = (acc[estado] || 0) + 1;
+      return acc;
+    }, {})
+  ), [cuadrillasNoAsistidas]);
+
+  const estadoInstalaciones = useMemo(() => (
+    instalaciones.reduce((acc, i) => {
+      const estado = i.estado?.toLowerCase() || "otro";
+      acc[estado] = (acc[estado] || 0) + 1;
+      return acc;
+    }, {})
+  ), [instalaciones]);
+
+  const estadoInstalacionesValidas = useMemo(() => (
+    instalacionesFiltradas.reduce((acc, i) => {
+      const estado = i.estado?.toLowerCase() || "otro";
+      acc[estado] = (acc[estado] || 0) + 1;
+      return acc;
+    }, {})
+  ), [instalacionesFiltradas]);
+
+  const distribucionTipos = useMemo(() => (
+    cuadrillasAsistidas.reduce((acc, c) => {
+      const tipo = c.tipo || "Otro";
+      acc[tipo] = (acc[tipo] || 0) + 1;
+      return acc;
+    }, {})
+  ), [cuadrillasAsistidas]);
+
+  const cuadrillasResidenciales = useMemo(
+    () => cuadrillasAsistidas.filter(c => c.nombre?.toLowerCase().includes("residencial")),
+    [cuadrillasAsistidas]
+  );
+  const cuadrillasCondominio = useMemo(
+    () => cuadrillasAsistidas.filter(c => c.nombre?.toLowerCase().includes("moto")),
+    [cuadrillasAsistidas]
   );
 
-  const cuadrillasInternas = cuadrillasAsistidas.filter(c =>
-    c.coordinador?.toLowerCase().includes("redes")
+  const cuadrillasInternas = useMemo(
+    () => cuadrillasAsistidas.filter(c => c.coordinador?.toLowerCase().includes("redes")),
+    [cuadrillasAsistidas]
   );
-  const cuadrillasExternas = cuadrillasAsistidas.filter(c =>
-    !c.coordinador?.toLowerCase().includes("redes")
+  const cuadrillasExternas = useMemo(
+    () => cuadrillasAsistidas.filter(c => !c.coordinador?.toLowerCase().includes("redes")),
+    [cuadrillasAsistidas]
   );
 
   return (
-    <div className="p-6 space-y-12 dark:bg-slate-900 dark:text-slate-200 min-h-screen"> {/* MODIFICACIÓN: Fondo y texto base para dark mode */}
+    <div className="min-h-screen space-y-12 p-6 dark:bg-slate-900 dark:text-slate-200">
+      <div className="mb-2 flex items-center gap-3">
+        <h1 className="text-2xl font-bold text-slate-800 dark:text-slate-100">
+          Dashboard Visual - {fecha}
+        </h1>
+
+        {/* Estado de carga */}
+        {cargando && (
+          <span className="inline-flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+            <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" opacity="0.25" />
+              <path d="M22 12a10 10 0 0 1-10 10" stroke="currentColor" strokeWidth="4" />
+            </svg>
+            Cargando datos…
+          </span>
+        )}
+      </div>
+
       <div>
-        <h1 className="text-2xl font-bold mb-4 text-slate-800 dark:text-slate-100">Dashboard Visual - {fecha}</h1> {/* MODIFICACIÓN: Color de título */}
         <input
           type="date"
           value={fecha}
           onChange={(e) => setFecha(e.target.value)}
-          className="border p-2 rounded dark:bg-slate-700 dark:border-slate-600 dark:text-slate-100 dark:[color-scheme:dark]" // MODIFICACIONES CLAVE AQUÍ
+          className="rounded border p-2 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-100 dark:[color-scheme:dark]"
         />
       </div>
 
       {/* Tarjetas superiores */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">
         <Card title="Cuadrillas en Campo (Asistieron)">
-          <p className="text-5xl font-extrabold text-center text-blue-600 dark:text-blue-400">{totalAsistidas}</p> {/* MODIFICACIÓN */}
+          <p className="text-center text-5xl font-extrabold text-blue-600 dark:text-blue-400">{totalAsistidas}</p>
         </Card>
 
         <Card title="Efectividad">
-          <p className="text-5xl font-extrabold text-center text-green-500 dark:text-green-400">{efectividad.toFixed(1)}%</p> {/* MODIFICACIÓN */}
-          <p className="text-sm text-gray-600 dark:text-gray-400 text-center"> {/* MODIFICACIÓN */}
+          <p className="text-center text-5xl font-extrabold text-green-500 dark:text-green-400">
+            {efectividad.toFixed(1)}%
+          </p>
+          <p className="text-center text-sm text-gray-600 dark:text-gray-400">
             {finalizadasValidas} finalizadas válidas de {totalInstalaciones}
           </p>
         </Card>
 
         <Card title="Índice de Productividad">
-          <p className="text-5xl font-extrabold text-center text-purple-600 dark:text-purple-400">{ponderado.toFixed(2)}</p> {/* MODIFICACIÓN */}
-          <p className="text-sm text-gray-600 dark:text-gray-400 text-center">Finalizadas válidas / Cuadrillas asistidas</p> {/* MODIFICACIÓN */}
+          <p className="text-center text-5xl font-extrabold text-purple-600 dark:text-purple-400">
+            {ponderado.toFixed(2)}
+          </p>
+          <p className="text-center text-sm text-gray-600 dark:text-gray-400">
+            Finalizadas válidas / Cuadrillas asistidas
+          </p>
         </Card>
       </div>
 
-      {/* Sección de gráficos inferiores */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-        {/* Ejemplo de un Card de gráfico */}
+      {/* Gráficos */}
+      <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">
         <Card title="Cuadrillas No Asistidas">
           <ResponsiveContainer width="100%" height={250}>
             <PieChart>
@@ -143,23 +210,17 @@ export default function Dashboard() {
                 dataKey="value"
                 outerRadius={80}
                 label={({ name, value }) => `${name}: ${value}`}
-                // Para el texto del label dentro del Pie, Recharts puede no respetar el color del tema directamente
-                // A veces necesitas pasar props como `labelLine={false}` y un `label` personalizado con estilos.
               >
                 {Object.entries(resumenNoAsistidas).map((entry, index) => (
-                  <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                  <Cell key={`cell-na-${index}`} fill={COLORS[index % COLORS.length]} />
                 ))}
               </Pie>
-              <Tooltip
-                contentStyle={{ backgroundColor: 'rgba(50, 50, 50, 0.8)', border: 'none', borderRadius: '4px' }} // Estilo dark para Tooltip
-                labelStyle={{ color: '#fff' }}
-                itemStyle={{ color: '#fff' }}
-              />
-              <Legend wrapperStyle={{ color: '#cbd5e1' }} /> {/* Ajustar color del texto de la leyenda */}
+              <Tooltip contentStyle={{ backgroundColor: 'rgba(50, 50, 50, 0.8)', border: 'none', borderRadius: '4px' }} labelStyle={{ color: '#fff' }} itemStyle={{ color: '#fff' }} />
+              <Legend wrapperStyle={{ color: '#cbd5e1' }} />
             </PieChart>
           </ResponsiveContainer>
         </Card>
-        {/* ... Repetir patrón similar para otros gráficos, ajustando Tooltip y Legend ... */}
+
         <Card title="Zonas cubiertas hoy">
           <ResponsiveContainer width="100%" height={250}>
             <PieChart>
@@ -169,7 +230,7 @@ export default function Dashboard() {
                 label={({ name, value }) => `${name}: ${value}`}
               >
                 {Object.entries(zonasConCantidad).map((entry, index) => (
-                  <Cell key={`cell-${index}`} fill={COLORS[(index + 1) % COLORS.length]} /> // Offset de color
+                  <Cell key={`cell-z-${index}`} fill={COLORS[(index + 1) % COLORS.length]} />
                 ))}
               </Pie>
               <Tooltip contentStyle={{ backgroundColor: 'rgba(50, 50, 50, 0.8)', border: 'none', borderRadius: '4px' }} labelStyle={{ color: '#fff' }} itemStyle={{ color: '#fff' }} />
@@ -188,7 +249,7 @@ export default function Dashboard() {
                 label={({ name, value }) => `${name}: ${value}`}
               >
                 {Object.entries(estadoInstalacionesValidas).map((entry, index) => (
-                  <Cell key={`cell-${index}`} fill={COLORS[(index + 2) % COLORS.length]} /> // Offset de color
+                  <Cell key={`cell-ei-${index}`} fill={COLORS[(index + 2) % COLORS.length]} />
                 ))}
               </Pie>
               <Tooltip contentStyle={{ backgroundColor: 'rgba(50, 50, 50, 0.8)', border: 'none', borderRadius: '4px' }} labelStyle={{ color: '#fff' }} itemStyle={{ color: '#fff' }} />
@@ -196,7 +257,6 @@ export default function Dashboard() {
             </PieChart>
           </ResponsiveContainer>
         </Card>
-
 
         <Card title="Distribución de Tipos de Cuadrillas Asistidas">
           <ResponsiveContainer width="100%" height={250}>
@@ -208,7 +268,7 @@ export default function Dashboard() {
                 label={({ name, value }) => `${name}: ${value}`}
               >
                 {Object.entries(distribucionTipos).map((entry, index) => (
-                  <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                  <Cell key={`cell-t-${index}`} fill={COLORS[index % COLORS.length]} />
                 ))}
               </Pie>
               <Tooltip />
@@ -263,11 +323,10 @@ export default function Dashboard() {
   );
 }
 
-// Componente Card (Asegúrate que este componente también sea compatible con dark mode)
 function Card({ title, children }) {
   return (
-    <div className="bg-white dark:bg-slate-800 p-4 rounded-lg shadow"> {/* MODIFICACIÓN: Fondo para dark mode */}
-      <h3 className="text-lg font-semibold mb-2 text-slate-700 dark:text-slate-200">{title}</h3> {/* MODIFICACIÓN: Color de título */}
+    <div className="rounded-lg bg-white p-4 shadow dark:bg-slate-800">
+      <h3 className="mb-2 text-lg font-semibold text-slate-700 dark:text-slate-200">{title}</h3>
       {children}
     </div>
   );

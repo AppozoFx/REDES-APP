@@ -1,21 +1,25 @@
-// src/app/context/AuthContext.js
 "use client";
+
 import { createContext, useContext, useEffect, useState } from "react";
 import { onAuthStateChanged } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
-import { auth, db } from "@/firebaseConfig"; // ¡Verifica esta ruta!
+import { auth, db } from "@/firebaseConfig";
 
-// ... (resto de tu código de AuthContext)// Crear el contexto
-const AuthContext = createContext();
+// Estado del contexto
+const AuthContext = createContext({
+  user: null,
+  userData: null,
+  initializing: true,
+});
 
-// Hook para acceder al contexto desde cualquier componente
+// Hook
 export const useAuth = () => useContext(AuthContext);
 
-// Proveedor del contexto
+// Provider
 export function AuthProvider({ children }) {
-  const [user, setUser] = useState(null);          // Usuario autenticado
-  const [userData, setUserData] = useState(null);  // Datos desde Firestore
-  const [loading, setLoading] = useState(true);    // Estado de carga
+  const [user, setUser] = useState(null);
+  const [userData, setUserData] = useState(null);
+  const [initializing, setInitializing] = useState(true);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
@@ -23,25 +27,24 @@ export function AuthProvider({ children }) {
 
       if (firebaseUser) {
         try {
-          const docRef = doc(db, "usuarios", firebaseUser.uid);
-          const docSnap = await getDoc(docRef);
-          setUserData(docSnap.exists() ? { id: docSnap.id, ...docSnap.data() } : null);
-        } catch (error) {
-          console.error("Error al obtener datos del usuario:", error);
+          const snap = await getDoc(doc(db, "usuarios", firebaseUser.uid));
+          setUserData(snap.exists() ? { id: snap.id, ...snap.data() } : null);
+        } catch (err) {
+          console.warn("Error al obtener datos del usuario:", err?.code || err?.message);
           setUserData(null);
         }
       } else {
         setUserData(null);
       }
 
-      setLoading(false);
+      setInitializing(false);
     });
 
     return () => unsubscribe();
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, userData, loading }}>
+    <AuthContext.Provider value={{ user, userData, initializing }}>
       {children}
     </AuthContext.Provider>
   );
