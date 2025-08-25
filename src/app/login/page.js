@@ -1,8 +1,7 @@
 // src/app/login/page.js
 "use client";
 
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useState } from "react";
 import { signInWithEmailAndPassword, setPersistence, browserSessionPersistence } from "firebase/auth";
 import { motion } from "framer-motion";
 import Image from "next/image";
@@ -11,33 +10,23 @@ import { Eye, EyeOff, LogIn } from "lucide-react";
 import { auth } from "@/firebaseConfig";
 
 export default function Login() {
-  const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
 
-  // Reset de éxito si el usuario vuelve a escribir
-  useEffect(() => {
-    if (success) setSuccess(false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [email, password]);
-
   const handleLogin = async (e) => {
     e.preventDefault();
     if (loading) return;
     setLoading(true);
-
     try {
       const safeEmail = email.trim().toLowerCase();
-      // Blindaje extra (aunque ya lo tienes global)
       await setPersistence(auth, browserSessionPersistence);
       await signInWithEmailAndPassword(auth, safeEmail, password);
-
       setSuccess(true);
       toast.success("Ingreso exitoso");
-      setTimeout(() => router.replace("/dashboard"), 1000);
+      // ⛔️ no redirigimos aquí; / (page.js) decidirá /login o /dashboard
     } catch (error) {
       let msg = "Ocurrió un error inesperado. Intenta de nuevo.";
       switch (error?.code) {
@@ -69,7 +58,6 @@ export default function Login() {
     <div className="relative min-h-dvh overflow-hidden">
       {/* Fondo degradado con acentos */}
       <div className="absolute inset-0 bg-gradient-to-br from-[#0f1a2e] via-[#1e3a8a] to-[#ff6413]" />
-      {/* Brillos suaves */}
       <div className="pointer-events-none absolute -top-24 -left-24 h-72 w-72 rounded-full bg-white/10 blur-3xl" />
       <div className="pointer-events-none absolute -bottom-20 -right-20 h-72 w-72 rounded-full bg-orange-300/20 blur-3xl" />
 
@@ -85,13 +73,7 @@ export default function Login() {
             {/* Header */}
             <div className="mb-8 text-center">
               <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-white/70 shadow dark:bg-white/20">
-                <Image
-                  src="/image/logo.png"
-                  alt="Logo RedesMyD"
-                  width={40}
-                  height={40}
-                  priority
-                />
+                <Image src="/image/logo.png" alt="Logo RedesMyD" width={40} height={40} priority />
               </div>
               <h1 className="mt-4 text-2xl font-bold text-gray-900 dark:text-white">
                 Bienvenido a <span className="text-[#ff6413]">RedesMYD</span>
@@ -112,7 +94,7 @@ export default function Login() {
                   <input
                     type="email"
                     value={email}
-                    onChange={(e) => setEmail(e.target.value)}
+                    onChange={(e) => { setEmail(e.target.value); if (success) setSuccess(false); }}
                     required
                     disabled={loading || success}
                     placeholder="usuario@correo.com"
@@ -120,9 +102,7 @@ export default function Login() {
                     className="w-full rounded-xl border border-gray-300 bg-white/90 px-4 py-2.5 text-gray-900 outline-none transition focus:border-transparent focus:ring-2 focus:ring-orange-400 dark:border-white/20 dark:bg-white/10 dark:text-white"
                   />
                 </div>
-                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                  Usa tu correo corporativo.
-                </p>
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Usa tu correo corporativo.</p>
               </div>
 
               {/* Password */}
@@ -134,7 +114,7 @@ export default function Login() {
                   <input
                     type={showPassword ? "text" : "password"}
                     value={password}
-                    onChange={(e) => setPassword(e.target.value)}
+                    onChange={(e) => { setPassword(e.target.value); if (success) setSuccess(false); }}
                     required
                     disabled={loading || success}
                     placeholder="••••••••"
@@ -154,9 +134,7 @@ export default function Login() {
                     {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
                   </button>
                 </div>
-                <p id="password-hint" className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                  Mínimo 8 caracteres.
-                </p>
+                <p id="password-hint" className="mt-1 text-xs text-gray-500 dark:text-gray-400">Mínimo 8 caracteres.</p>
               </div>
 
               {/* Botón */}
@@ -175,9 +153,7 @@ export default function Login() {
                     Ingresando…
                   </>
                 ) : success ? (
-                  <>
-                    ✅ ¡Éxito!
-                  </>
+                  <>✅ ¡Éxito!</>
                 ) : (
                   <>
                     <LogIn size={18} className="transition group-hover:translate-x-0.5" />
@@ -204,7 +180,7 @@ export default function Login() {
             )}
           </div>
 
-          {/* Footer pequeño */}
+          {/* Footer */}
           <div className="mt-6 text-center text-xs text-white/80">
             © {new Date().getFullYear()} RedesMYD • Desarrollado por Arturo Pozo
           </div>
