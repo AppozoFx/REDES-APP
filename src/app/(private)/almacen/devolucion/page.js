@@ -1,13 +1,11 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { db, storage } from "@/firebaseConfig";
-
-// ✅ Importa solo desde firestore lo que corresponde
 import {
   collection,
   getDocs,
-  doc, // este es el correcto
+  doc,
   getDoc,
   writeBatch,
   increment,
@@ -15,39 +13,233 @@ import {
   updateDoc,
   addDoc,
   serverTimestamp,
-  deleteDoc // <-- ✅ AGREGA ESTA LÍNEA
+  deleteDoc,
 } from "firebase/firestore";
-
-// ✅ Desde storage solo 'ref' y 'uploadString' (sin 'doc')
 import { ref as storageRef, uploadBytes, getDownloadURL } from "firebase/storage";
-
-
 import { useAuth } from "@/app/context/AuthContext";
 import { jsPDF } from "jspdf";
 import JsBarcode from "jsbarcode";
-
 import toast from "react-hot-toast";
 
+/* =======================
+   CONSTANTES
+======================= */
+const MATS_AUT_ONT = {
+  actas: 1,
+  conectores: 2,
+  rosetas: 1,
+  acopladores: 1,
+  pachcord: 1,
+  cintillos_30: 4,
+  cintillos_bandera: 1,
+};
 
+const materialesDisponibles = [
+  "actas",
+  "conectores",
+  "cintillos_30",
+  "cintillos_bandera",
+  "rosetas",
+  "acopladores",
+  "pachcord",
+  "cinta_aislante",
+  "caja_grapas",
+  "clevis",
+  "hebillas",
+  "templadores",
+  "anclajes_tipo_p",
+];
 
+/* =======================
+   WHATSAPP helpers
+======================= */
+const obtenerCelularesTecnicos = async (tecnicosUID = []) => {
+  const celulares = [];
+  for (const uid of tecnicosUID) {
+    const ref = doc(db, "usuarios", uid);
+    const snap = await getDoc(ref);
+    if (snap.exists()) {
+      const data = snap.data();
+      if (data.celular) celulares.push(data.celular);
+    }
+  }
+  return celulares;
+};
 
+const enviarPorWhatsAppManual = (
+  numero,
+  { tipoGuia, guiaId, cuadrilla, tecnicos, usuario, urlComprobante, extraInfo = "" }
+) => {
+  const mensaje = `📄 *${tipoGuia}*
+*Guía:* ${guiaId}
+*Cuadrilla:* ${cuadrilla}
+*Técnicos:* ${tecnicos.join(", ")}
+*Registrado por:* ${usuario}
+${extraInfo ? `\n${extraInfo}` : ""}
+
+Puedes ver el comprobante aquí:
+${urlComprobante}`;
+  const enlace = `https://wa.me/51${numero}?text=${encodeURIComponent(mensaje)}`;
+  window.open(enlace, "_blank");
+};
+
+/* =======================
+   PDF (80mm)
+======================= */
+const generarPDFDevolucion = async (guiaId, datos) => {
+  const calcularAltura = () => {
+    let y = 60;
+    y += (datos.tecnicos?.length || 0) * 5;
+    y += (datos.equipos?.length || 0) * 5;
+    if (datos.drump) y += 8;
+    if (datos.metraje > 0) y += 5;
+    y += Object.entries(datos.materiales || {}).length * 5;
+    y += 20;
+    y += 55;
+    return Math.max(y, 200);
+  };
+
+  const alturaTotal = calcularAltura();
+  const docpdf = new jsPDF({ unit: "mm", format: [80, alturaTotal] });
+
+  const renderContenido = (yIni = 10) => {
+    let y = yIni;
+    const C = { align: "center" };
+    docpdf.setFont("helvetica", "normal");
+    docpdf.setFontSize(9);
+
+    docpdf.text("CONSTRUCCIÓN DE REDES M&D S.A.C", 40, y, C); y += 5;
+    docpdf.text("RUC: 20601345979", 40, y, C); y += 5;
+    docpdf.text("Cal. Juan Prado de Zela Mza. F2 Lote. 3", 40, y, C); y += 5;
+    docpdf.text("Apv. San Francisco de Cayran", 40, y, C); y += 5;
+    docpdf.text("Celular/WSP: 913 637 815", 40, y, C); y += 7;
+
+    docpdf.setFont("helvetica", "bold");
+    docpdf.text(`GUÍA: ${guiaId}`, 40, y, C); y += 5;
+    docpdf.setFont("helvetica", "normal");
+    docpdf.text(`FECHA: ${new Date().toLocaleString("es-PE")}`, 40, y, C); y += 5;
+    docpdf.text(`USUARIO: ${datos.usuario}`, 40, y, C); y += 5;
+    docpdf.text(`Cuadrilla: ${datos.cuadrillaNombre}`, 40, y, C); y += 5;
+
+    (datos.tecnicos || []).forEach((tec, i) => {
+      docpdf.text(`Técnico ${i + 1}: ${tec}`, 40, y, C); y += 5;
+    });
+
+    y += 3;
+    docpdf.setFont("helvetica", "bold");
+    docpdf.text("EQUIPOS DEVUELTOS", 40, y, C); y += 6;
+    docpdf.setFont("helvetica", "normal");
+
+    (datos.equipos || []).forEach((eq) => {
+      docpdf.text(`${eq.SN} - ${eq.equipo}`, 40, y, C); y += 5;
+    });
+
+    if (datos.drump) {
+      y += 4;
+      docpdf.text(`DRUMP: ${datos.drump}`, 40, y, C); y += 5;
+    }
+    if (datos.metraje > 0) {
+      docpdf.text(`Metros devueltos: ${datos.metraje} m`, 40, y, C); y += 5;
+    }
+
+    const mats = Object.entries(datos.materiales || {});
+    if (mats.length > 0) {
+      y += 4;
+      docpdf.setFont("helvetica", "bold");
+      docpdf.text("MATERIALES DEVUELTOS", 40, y, C); y += 6;
+      docpdf.setFont("helvetica", "normal");
+      mats.forEach(([n, c]) => {
+        docpdf.text(`${n.replaceAll("_", " ")}: ${c}`, 40, y, C); y += 5;
+      });
+    }
+
+    y += 4;
+    docpdf.text(`Observaciones: ${datos.observacion || "Sin observaciones"}`, 10, y, { maxWidth: 60 }); y += 1;
+
+    const canvas = document.createElement("canvas");
+    JsBarcode(canvas, guiaId, { format: "CODE128", displayValue: false, width: 2, height: 15 });
+    const imgData = canvas.toDataURL("image/png");
+    docpdf.addImage(imgData, "PNG", 5, y, 70, 25);
+    y += 39;
+
+    docpdf.line(10, y, 40, y);
+    docpdf.line(45, y, 75, y);
+    y += 10;
+    docpdf.text("Técnico", 25, y, { align: "center" });
+    docpdf.text("Almacén", 60, y, { align: "center" });
+  };
+
+  renderContenido();
+
+  const pdfBlob = docpdf.output("blob");
+  const storagePath = `guias_devolucion/${guiaId}.pdf`;
+  const refStorage = storageRef(storage, storagePath);
+  await uploadBytes(refStorage, pdfBlob);
+  const urlComprobante = await getDownloadURL(refStorage);
+
+  const tecnicosUID = datos.tecnicosUID || [];
+  const celulares = await obtenerCelularesTecnicos(tecnicosUID);
+  celulares.forEach((numero) =>
+    enviarPorWhatsAppManual(numero, {
+      tipoGuia: "Devolución",
+      guiaId,
+      cuadrilla: datos.cuadrillaNombre,
+      tecnicos: datos.tecnicos,
+      usuario: datos.usuario,
+      urlComprobante,
+      extraInfo: `🛠️ *Equipos:* ${datos.equipos.length}\n📦 *Materiales:* ${
+        Object.values(datos.materiales || {}).reduce((a, b) => a + (Number(b) || 0), 0)
+      }\n🌀 *Metros devueltos:* ${datos.metraje || 0}`,
+    })
+  );
+
+  // doble impresión
+  const url = URL.createObjectURL(pdfBlob);
+  const iframe = document.createElement("iframe");
+  iframe.style.display = "none";
+  iframe.src = url;
+  document.body.appendChild(iframe);
+  iframe.onload = () => {
+    iframe.contentWindow.focus();
+    iframe.contentWindow.print();
+    setTimeout(() => {
+      iframe.contentWindow.print();
+    }, 1000);
+  };
+  iframe.onafterprint = () => {
+    document.body.removeChild(iframe);
+    URL.revokeObjectURL(url);
+  };
+
+  return urlComprobante;
+};
+
+/* =======================
+   COMPONENTE
+======================= */
 export default function Devolucion() {
-  const { userData } = useAuth();
+  const { user, userData } = useAuth();
+
   const [cuadrilla, setCuadrilla] = useState("");
   const [listaCuadrillas, setListaCuadrillas] = useState([]);
   const [usuarios, setUsuarios] = useState([]);
   const [tecnicos, setTecnicos] = useState([]);
+
   const [sn, setSn] = useState("");
   const [listaEquipos, setListaEquipos] = useState([]);
   const [errorSn, setErrorSn] = useState("");
+
   const [ultimaGuia, setUltimaGuia] = useState("");
   const [materialesDevueltos, setMaterialesDevueltos] = useState({});
   const inputRef = useRef(null);
 
   const [stockMaterialesCuadrilla, setStockMaterialesCuadrilla] = useState([]);
-const [stockEquiposCuadrilla, setStockEquiposCuadrilla] = useState([]);
-const [procesando, setProcesando] = useState(false);
+  const [stockEquiposCuadrilla, setStockEquiposCuadrilla] = useState([]);
+  const [bobinasActivas, setBobinasActivas] = useState([]);
 
+  const [procesando, setProcesando] = useState(false);
+
+  const [showPreview, setShowPreview] = useState(false);
 
   const [datosDevolucion, setDatosDevolucion] = useState({
     cuadrillaId: "",
@@ -58,380 +250,300 @@ const [procesando, setProcesando] = useState(false);
     drump: "",
     metraje: 0,
     observacion: "",
-    usuario: userData?.nombres + " " + userData?.apellidos || "",
-    fecha: new Date()
+    usuario:
+      `${userData?.nombres || ""} ${userData?.apellidos || ""}`.trim() ||
+      user?.email ||
+      "Usuario",
+    fecha: new Date(),
   });
 
-  const materialesDisponibles = [
-    "actas", "conectores", "cintillos_30", "cintillos_bandera",
-    "rosetas", "acopladores", "pachcord", "cinta_aislante",
-    "caja_grapas", "clevis", "hebillas", "templadores", "anclajes_tipo_p"
-  ];
+  /* ======= Carga inicial ======= */
+  useEffect(() => {
+    (async () => {
+      const cuadrillaSnap = await getDocs(collection(db, "cuadrillas"));
+      const usuarioSnap = await getDocs(collection(db, "usuarios"));
+      setListaCuadrillas(cuadrillaSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
+      setUsuarios(usuarioSnap.docs.map((d) => ({ uid: d.id, ...d.data() })));
+    })();
+  }, []);
 
+  /* ======= Helpers ======= */
+  const getNombreCompleto = (uid) => {
+    const u = usuarios.find((x) => x.uid === uid);
+    return u ? `${u.nombres || ""} ${u.apellidos || ""}`.trim() : uid;
+  };
 
-  // 📞 Función para obtener los celulares de los técnicos
-const obtenerCelularesTecnicos = async (tecnicosUID) => {
-  const celulares = [];
+  const obtenerStockCuadrilla = async (cuadrillaId, tipo) => {
+    if (!cuadrillaId) return;
+    const mats = await getDocs(collection(db, `cuadrillas/${cuadrillaId}/stock_materiales`));
+    setStockMaterialesCuadrilla(mats.docs.map((d) => ({ id: d.id, ...d.data() })));
+    const eqs = await getDocs(collection(db, `cuadrillas/${cuadrillaId}/stock_equipos`));
+    setStockEquiposCuadrilla(eqs.docs.map((d) => ({ id: d.id, ...d.data() })));
 
-  for (const uid of tecnicosUID) {
-    const ref = doc(db, "usuarios", uid);
-    const snap = await getDoc(ref);
-
-    if (snap.exists()) {
-      const data = snap.data();
-      if (data.celular) {
-        celulares.push(data.celular);
-      }
+    if (tipo === "Residencial") {
+      const snap = await getDocs(collection(db, `cuadrillas/${cuadrillaId}/stock_bobinas`));
+      const activas = snap.docs.map((d) => d.data()).filter((b) => b.estado !== "devuelto");
+      setBobinasActivas(activas);
+    } else {
+      setBobinasActivas([]);
     }
-  }
+  };
 
-  return celulares;
-};
+  /* ======= Selección de cuadrilla ======= */
+  useEffect(() => {
+    const sel = listaCuadrillas.find((c) => (c.nombre || "").toLowerCase() === (cuadrilla || "").toLowerCase());
+    if (sel) {
+      setTecnicos(sel.tecnicos || []);
+      setDatosDevolucion((prev) => ({
+        ...prev,
+        cuadrillaId: sel.id,
+        cuadrillaNombre: sel.nombre,
+        tipo: sel.r_c,
+        tecnicos: (sel.tecnicos || []).map(getNombreCompleto),
+      }));
+      obtenerStockCuadrilla(sel.id, sel.r_c);
+    }
+  }, [cuadrilla, listaCuadrillas]);
 
-// 💬 Función para abrir WhatsApp Web con el mensaje
-const enviarPorWhatsAppManual = (numero, { tipoGuia, guiaId, cuadrilla, tecnicos, usuario, urlComprobante, extraInfo = "" }) => {
-  const mensaje = 
-`📄 *${tipoGuia}*
-*Guía:* ${guiaId}
-*Cuadrilla:* ${cuadrilla}
-*Técnicos:* ${tecnicos.join(", ")}
-*Registrado por:* ${usuario}
-${extraInfo ? `\n${extraInfo}` : ""}
+  /* ======= DRUMPs activos ======= */
+  useEffect(() => {
+    (async () => {
+      if (!datosDevolucion.cuadrillaId || datosDevolucion.tipo !== "Residencial") return;
+      const snap = await getDocs(collection(db, `cuadrillas/${datosDevolucion.cuadrillaId}/stock_bobinas`));
+      const activas = snap.docs.map((d) => d.data()).filter((b) => b.estado !== "devuelto");
+      setBobinasActivas(activas);
+    })();
+  }, [datosDevolucion.cuadrillaId, datosDevolucion.tipo]);
 
-Puedes ver el comprobante aquí:
-${urlComprobante}`;
-
-  const enlace = `https://wa.me/51${numero}?text=${encodeURIComponent(mensaje)}`;
-  window.open(enlace, "_blank");
-};
-
-
-
-  
+  /* ======= Generar guía ======= */
   const generarNumeroGuia = async () => {
     const anio = new Date().getFullYear();
     const ref = doc(db, "counters", "guias_devolucion");
     const snap = await getDoc(ref);
-  
+
     if (!snap.exists()) {
       await setDoc(ref, { anio, ultimoNumero: 1 });
       return `DEV-${anio}-00001`;
     }
-  
-    const { ultimoNumero } = snap.data();
-    const nuevoNumero = ultimoNumero + 1;
+    const nuevo = (snap.data().ultimoNumero || 0) + 1;
     await updateDoc(ref, { ultimoNumero: increment(1) });
-  
-    const numeroFormateado = nuevoNumero.toString().padStart(5, "0");
-    return `DEV-${anio}-${numeroFormateado}`;
+    return `DEV-${anio}-${String(nuevo).padStart(5, "0")}`;
   };
 
+  /* ======= Escanear SN ======= */
+  const handleScan = async (e) => {
+    const codigo = e.target.value.trim().toUpperCase();
 
-
-
-  const eliminarBobinaDeStockCuadrilla = async (codigoDrump, cuadrillaId) => {
-    if (!codigoDrump || !cuadrillaId) return false;
-  
-    const drumpRef = doc(db, `cuadrillas/${cuadrillaId}/stock_bobinas`, codigoDrump);
-    const snap = await getDoc(drumpRef);
-  
-    if (!snap.exists()) {
-      toast.error(`⚠️ El DRUMP ${codigoDrump} no existe en el stock de la cuadrilla.`);
-      return false;
-    }
-  
-    await deleteDoc(drumpRef);
-    toast.success(`🗑️ DRUMP ${codigoDrump} eliminado del stock de cuadrilla`);
-    return true;
-  };
-  
-  
-
-
-
-
-  const generarPDFDevolucion = async (guiaId, datos) => {
-    // 1️⃣ Calcular altura dinámica con mínimo de 200mm
-    const calcularAltura = () => {
-      let y = 60;  // Cabecera
-      y += datos.tecnicos.length * 5;
-      y += datos.equipos.length * 5;
-      if (datos.drump) y += 8;
-      if (datos.metraje > 0) y += 5;
-      y += Object.entries(datos.materiales || {}).length * 5;
-      y += 20;  // Observaciones
-  
-      y += 55;  // Espacio para código de barras + firmas
-  
-      return Math.max(y, 200);  // Altura mínima
-    };
-  
-    const alturaTotal = calcularAltura();
-    const doc = new jsPDF({ unit: "mm", format: [80, alturaTotal] });
-  
-    // 2️⃣ Renderizar contenido
-    const renderContenido = (yInicial = 10) => {
-      let y = yInicial;
-      doc.setFontSize(9);
-      doc.setFont("helvetica", "normal");
-      const centrado = { align: "center" };
-  
-      doc.text("CONSTRUCCIÓN DE REDES M&D S.A.C", 40, y, centrado); y += 5;
-      doc.text("RUC: 20601345979", 40, y, centrado); y += 5;
-      doc.text("Cal. Juan Prado de Zela Mza. F2 Lote. 3", 40, y, centrado); y += 5;
-      doc.text("Apv. San Francisco de Cayran", 40, y, centrado); y += 5;
-      doc.text("Celular/WSP: 913 637 815", 40, y, centrado); y += 7;
-  
-      doc.setFont("helvetica", "bold");
-      doc.text(`GUÍA: ${guiaId}`, 40, y, centrado); y += 5;
-      doc.setFont("helvetica", "normal");
-      doc.text(`FECHA: ${new Date().toLocaleString()}`, 40, y, centrado); y += 5;
-      doc.text(`USUARIO: ${datos.usuario}`, 40, y, centrado); y += 5;
-      doc.text(`Cuadrilla: ${datos.cuadrillaNombre}`, 40, y, centrado); y += 5;
-  
-      datos.tecnicos.forEach((tec, i) => {
-        doc.text(`Técnico ${i + 1}: ${tec}`, 40, y, centrado); y += 5;
-      });
-  
-      y += 3;
-      doc.setFont("helvetica", "bold");
-      doc.text("EQUIPOS DEVUELTOS", 40, y, centrado); y += 6;
-      doc.setFont("helvetica", "normal");
-  
-      datos.equipos.forEach(eq => {
-        doc.text(`${eq.SN} - ${eq.equipo}`, 40, y, centrado); y += 5;
-      });
-  
-      if (datos.drump) {
-        y += 4;
-        doc.text(`DRUMP: ${datos.drump}`, 40, y, centrado); y += 5;
+    const fire = async () => {
+      if (!codigo) return;
+      if (!datosDevolucion.cuadrillaId) {
+        toast.error("Selecciona una cuadrilla primero.");
+        return;
       }
-  
-      if (datos.metraje > 0) {
-        doc.text(`Metros devueltos: ${datos.metraje} m`, 40, y, centrado); y += 5;
+      if (listaEquipos.some((eq) => eq.SN === codigo)) {
+        setErrorSn("⚠️ Este SN ya ha sido escaneado.");
+        setSn("");
+        return;
       }
-  
-      const materiales = Object.entries(datos.materiales || {});
-      if (materiales.length > 0) {
-        y += 4;
-        doc.setFont("helvetica", "bold");
-        doc.text("MATERIALES DEVUELTOS", 40, y, centrado); y += 6;
-        doc.setFont("helvetica", "normal");
-        materiales.forEach(([nombre, cant]) => {
-          doc.text(`${nombre.replaceAll("_", " ")}: ${cant}`, 40, y, centrado); y += 5;
+
+      const snap = await getDocs(collection(db, "equipos"));
+      const docEq = snap.docs.find((d) => (d.data().SN || "").toUpperCase() === codigo);
+      if (!docEq) {
+        setErrorSn("❌ Este SN no se encuentra en la base de datos.");
+        setSn("");
+        return;
+      }
+
+      const data = docEq.data();
+      const estado = (data.estado || "").toLowerCase();
+
+      if (estado !== "campo" && estado !== "instalado") {
+        setErrorSn("⚠️ Solo se pueden devolver equipos que estén en campo o instalados.");
+        setSn("");
+        return;
+      }
+
+      if (estado === "campo" && (data.ubicacion || "") !== datosDevolucion.cuadrillaNombre) {
+        setErrorSn(`⚠️ Este equipo no pertenece a la cuadrilla ${datosDevolucion.cuadrillaNombre}.`);
+        setSn("");
+        return;
+      }
+
+      if (estado === "instalado") {
+        const cliente =
+          data.cliente ||
+          data.cliente_nombre ||
+          data.nombre_cliente ||
+          data.ubicacion ||
+          "CLIENTE NO REGISTRADO";
+        setDatosDevolucion((prev) => ({
+          ...prev,
+          observacion: `${prev.observacion ? prev.observacion + " | " : ""}SN ${data.SN} instalado en: ${cliente}`,
+        }));
+      }
+
+      const nuevo = { SN: data.SN, equipo: data.equipo, descripcion: data.descripcion };
+      setListaEquipos((p) => [...p, nuevo]);
+      setDatosDevolucion((p) => ({ ...p, equipos: [...p.equipos, nuevo] }));
+      setErrorSn("");
+      setSn("");
+
+      if ((data.equipo || "").toUpperCase() === "ONT") {
+        setMaterialesDevueltos((prev) => {
+          const n = { ...prev };
+          Object.entries(MATS_AUT_ONT).forEach(([k, v]) => (n[k] = (n[k] || 0) + v));
+          return n;
         });
       }
-  
-      y += 4;
-      doc.text(`Observaciones: ${datos.observacion || "Sin observaciones"}`, 10, y, { maxWidth: 60 }); y += 1;
-  
-      // 📌 Código de barras
-      const canvas = document.createElement("canvas");
-      JsBarcode(canvas, guiaId, {
-        format: "CODE128",
-        displayValue: false,
-        width: 2,
-        height: 15,
+    };
+
+    if (e.key === "Enter" || e.nativeEvent?.inputType === "insertLineBreak") {
+      await fire();
+    }
+  };
+
+  const handleEliminarEquipo = (idx) => {
+    const el = listaEquipos[idx];
+    setListaEquipos((p) => p.filter((_, i) => i !== idx));
+    setDatosDevolucion((p) => ({ ...p, equipos: p.equipos.filter((_, i) => i !== idx) }));
+
+    if ((el?.equipo || "").toUpperCase() === "ONT") {
+      setMaterialesDevueltos((prev) => {
+        const r = { ...prev };
+        Object.entries(MATS_AUT_ONT).forEach(([k, v]) => {
+          r[k] = Math.max(0, (r[k] || 0) - v);
+        });
+        return r;
       });
-  
-      const imgData = canvas.toDataURL("image/png");
-      doc.addImage(imgData, "PNG", 5, y, 70, 25); 
-      y += 39;
-  
-      // 📌 Firmas
-      doc.line(10, y, 40, y);
-      doc.line(45, y, 75, y);
-      y += 10;
-  
-      doc.text("Técnico", 25, y, { align: "center" });
-      doc.text("Almacén", 60, y, { align: "center" });
-      y += 6;
-    };
-  
-    renderContenido();
-  
-    // 3️⃣ Guardar PDF
-    //doc.save(`${guiaId}.pdf`);
-
-    // 3️⃣ Subir a Firebase Storage
-  const pdfBlob = doc.output("blob");
-  const storagePath = `guias_devolucion/${guiaId}.pdf`;
-  const refStorage = storageRef(storage, storagePath);
-  await uploadBytes(refStorage, pdfBlob);
-
-  
-  const urlComprobante = await getDownloadURL(refStorage);
-  toast.success("📄 PDF subido a Firebase");
-
-  // 4️⃣ Obtener celulares y enviar WhatsApp
-  const tecnicosUID = datos.tecnicosUID || [];  // Asegúrate de pasar estos UID en tus datos
-  const celulares = await obtenerCelularesTecnicos(tecnicosUID);
-
-  celulares.forEach(numero => {
-    enviarPorWhatsAppManual(numero, {
-      tipoGuia: "Devolución",
-      guiaId,
-      cuadrilla: datos.cuadrillaNombre,
-      tecnicos: datos.tecnicos,
-      usuario: datos.usuario,
-      urlComprobante,
-      extraInfo: `🛠️ *Equipos:* ${datos.equipos.length}\n📦 *Materiales:* ${Object.values(datos.materiales).reduce((a,b) => a+b,0)}\n🌀 *Metros devueltos:* ${datos.metraje || 0}`
-    });
-  });
-  
-  
-  
- 
-     // 5️⃣ Imprimir doble
-  const url = URL.createObjectURL(pdfBlob);
-  const iframe = document.createElement("iframe");
-  iframe.style.display = "none";
-  iframe.src = url;
-  document.body.appendChild(iframe);
-
-  iframe.onload = () => {
-    iframe.contentWindow.focus();
-    iframe.contentWindow.print();
-    setTimeout(() => {
-      iframe.contentWindow.print();
-    }, 1000);
+    }
   };
 
-  return urlComprobante;   // ✅ Retornas el link del PDF aquí
-
-  iframe.onafterprint = () => {
-    document.body.removeChild(iframe);
-    URL.revokeObjectURL(url);
-  };
-};
-  
-  
-
-
-
-
-
-
-  useEffect(() => {
-    const fetchData = async () => {
-      const cuadrillaSnap = await getDocs(collection(db, "cuadrillas"));
-      const usuarioSnap = await getDocs(collection(db, "usuarios"));
-
-      setListaCuadrillas(cuadrillaSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-      setUsuarios(usuarioSnap.docs.map(doc => ({ uid: doc.id, ...doc.data() })));
-    };
-    fetchData();
-  }, []);
-
-
-
-  const [bobinasActivas, setBobinasActivas] = useState([]);
-
-useEffect(() => {
-  const fetchBobinasActivas = async () => {
-    if (!datosDevolucion.cuadrillaId || datosDevolucion.tipo !== "Residencial") return;
-
-    const snap = await getDocs(
-      collection(db, `cuadrillas/${datosDevolucion.cuadrillaId}/stock_bobinas`)
+  /* ======= VALIDACIÓN DE STOCK ======= */
+  const getStockCantidad = (nombre) => {
+    const item = stockMaterialesCuadrilla.find(
+      (m) => m.id === nombre || m.nombre === nombre
     );
-
-    const activas = snap.docs
-      .map(doc => doc.data())
-      .filter(b => b.estado !== "devuelto");
-
-    setBobinasActivas(activas);
+    return Number(item?.cantidad || 0);
   };
 
-  fetchBobinasActivas();
-}, [datosDevolucion.cuadrillaId, datosDevolucion.tipo]);
+  const validarStockAntesDeRegistrar = () => {
+    const errores = [];
 
-const obtenerStockCuadrilla = async (cuadrillaId) => {
-  if (!cuadrillaId) return;
+    // materiales
+    Object.entries(materialesDevueltos || {}).forEach(([nombre, cant]) => {
+      const cantidad = Number(cant) || 0;
+      if (cantidad <= 0) return;
+      const disponible = getStockCantidad(nombre);
+      if (cantidad > disponible) {
+        errores.push(
+          `• ${nombre.replaceAll("_", " ")}: devuelves ${cantidad}, disponible ${disponible}`
+        );
+      }
+    });
 
-  // Obtener stock de materiales
-  const materialesSnap = await getDocs(collection(db, `cuadrillas/${cuadrillaId}/stock_materiales`));
-  setStockMaterialesCuadrilla(materialesSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    // bobina condominio
+    if (datosDevolucion.tipo === "Condominio" && Number(datosDevolucion.metraje) > 0) {
+      const disp = getStockCantidad("bobina");
+      if (Number(datosDevolucion.metraje) > disp) {
+        errores.push(
+          `• Bobina (Condominio): devuelves ${datosDevolucion.metraje} m y la cuadrilla solo tiene ${disp} m`
+        );
+      }
+    }
 
-  // Obtener stock de equipos
-  const equiposSnap = await getDocs(collection(db, `cuadrillas/${cuadrillaId}/stock_equipos`));
-  setStockEquiposCuadrilla(equiposSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-};
+    // bobina residencial
+    if (datosDevolucion.tipo === "Residencial" && datosDevolucion.drump) {
+      const bob = bobinasActivas.find(
+        (b) => (b.codigo || "").toUpperCase() === (datosDevolucion.drump || "").toUpperCase()
+      );
+      if (!bob) {
+        errores.push(`• DRUMP ${datosDevolucion.drump} no está en stock de la cuadrilla.`);
+      } else if (Number(datosDevolucion.metraje) > Number(bob.metros || 0)) {
+        errores.push(
+          `• DRUMP ${datosDevolucion.drump}: devuelves ${datosDevolucion.metraje} m y solo tiene ${bob.metros} m`
+        );
+      }
+    }
 
-
-
-useEffect(() => {
-  const seleccionada = listaCuadrillas.find(
-    c => c.nombre?.toLowerCase() === cuadrilla?.toLowerCase()
-  );
-  if (seleccionada) {
-    setTecnicos(seleccionada.tecnicos || []);
-    setDatosDevolucion(prev => ({
-      ...prev,
-      cuadrillaId: seleccionada.id,
-      cuadrillaNombre: seleccionada.nombre,
-      tipo: seleccionada.r_c,
-      tecnicos: (seleccionada.tecnicos || []).map(getNombreCompleto),
-    }));
-
-    // 🚨 Obtener stock
-    obtenerStockCuadrilla(seleccionada.id);
-  }
-}, [cuadrilla, listaCuadrillas]);
-
-
-  const getNombreCompleto = (uid) => {
-    const usuario = usuarios.find(u => u.uid === uid);
-    return usuario ? `${usuario.nombres || ""} ${usuario.apellidos || ""}`.trim() : uid;
+    if (errores.length > 0) {
+      toast.error("Revisa los montos devueltos:\n" + errores.join("\n"));
+      return { ok: false, errores };
+    }
+    return { ok: true };
   };
 
-
-  const procesarDevolucionBobinaResidencial = async (batch) => {
-    const drumpRef = doc(db, `cuadrillas/${datosDevolucion.cuadrillaId}/stock_bobinas`, datosDevolucion.drump);
-    const drumpSnap = await getDoc(drumpRef);
-  
-    if (!drumpSnap.exists()) {
+  /* ======= DRUMP residencial ======= */
+  const procesarDevolucionBobinaResidencial = async (batch, guiaId) => {
+    const drRef = doc(db, `cuadrillas/${datosDevolucion.cuadrillaId}/stock_bobinas`, datosDevolucion.drump);
+    const drSnap = await getDoc(drRef);
+    if (!drSnap.exists()) {
       toast.error(`❌ El DRUMP ${datosDevolucion.drump} no existe en la cuadrilla.`);
       throw new Error("DRUMP no encontrado");
     }
-  
-    const datosBobina = drumpSnap.data();
-  
-    // Validar que no se devuelva más de lo que tiene la bobina
-    if (datosDevolucion.metraje > datosBobina.metros) {
+
+    const datosBobina = drSnap.data();
+    if (Number(datosDevolucion.metraje) > Number(datosBobina.metros || 0)) {
       toast.error(`❌ No puedes devolver más de ${datosBobina.metros} metros.`);
       throw new Error("Metros inválidos");
     }
-  
-    const metrosRestantes = datosBobina.metros - datosDevolucion.metraje;
-  
+
+    const metrosRestantes = Number(datosBobina.metros || 0) - Number(datosDevolucion.metraje || 0);
+
     if (metrosRestantes <= 0) {
-      // Si queda en 0, eliminar la bobina del stock
-      batch.delete(drumpRef);
-      toast.success(`🗑️ Bobina ${datosDevolucion.drump} eliminada del stock (0 metros).`);
+      // 🔁 dejar registro
+      batch.set(
+        drRef,
+        {
+          metros: 0,
+          estado: "devuelto",
+          f_devolucion: serverTimestamp(),
+          guia_devolucion: guiaId,
+          usuario: datosDevolucion.usuario,
+        },
+        { merge: true }
+      );
+      toast.success(`♻️ Bobina ${datosDevolucion.drump} marcada como *devuelto* (0 m).`);
     } else {
-      // Si aún quedan metros, actualizar la cantidad
-      batch.update(drumpRef, {
-        metros: metrosRestantes,
-        actualizadoPor: datosDevolucion.usuario,
-        actualizadoEn: new Date()
-      });
-      toast.success(`✅ Bobina actualizada: ${metrosRestantes} metros restantes.`);
+      batch.set(
+        drRef,
+        {
+          metros: metrosRestantes,
+          actualizadoPor: datosDevolucion.usuario,
+          actualizadoEn: serverTimestamp(),
+          guia_devolucion: guiaId,
+        },
+        { merge: true }
+      );
+      toast.success(`✅ Bobina actualizada: ${metrosRestantes} m restantes.`);
     }
-  
-    // Sumar metros devueltos al almacén general
+
+    // Sumar metros devueltos al almacén
     const bobinaAlmacenRef = doc(db, "materiales_stock", "bobina");
-    batch.update(bobinaAlmacenRef, {
-      cantidad: increment(datosDevolucion.metraje),
-      actualizadoPor: datosDevolucion.usuario,
-      actualizadoEn: new Date()
-    });
+    const snapAlm = await getDoc(bobinaAlmacenRef);
+    const actual = snapAlm.exists() ? Number(snapAlm.data().cantidad || 0) : 0;
+    batch.set(
+      bobinaAlmacenRef,
+      {
+        nombre: "bobina",
+        cantidad: actual + (Number(datosDevolucion.metraje) || 0),
+        actualizadoPor: datosDevolucion.usuario,
+        actualizadoEn: serverTimestamp(),
+      },
+      { merge: true }
+    );
   };
-  
 
-
+  /* ======= Registrar Devolución ======= */
   const handleRegistrarDevolucion = async () => {
+    if (procesando) return;
+    if (!datosDevolucion.cuadrillaId) {
+      toast.error("Selecciona una cuadrilla.");
+      return;
+    }
 
-    if (procesando) return;  // Evita doble clic
+    // Validación de stock (otra vez al confirmar)
+    const v = validarStockAntesDeRegistrar();
+    if (!v.ok) return;
 
     const toastId = toast.loading("Registrando devolución...");
     setProcesando(true);
@@ -440,476 +552,541 @@ useEffect(() => {
       const batch = writeBatch(db);
       const guiaId = await generarNumeroGuia();
       setUltimaGuia(guiaId);
-  
-      // 1️⃣ Validación básica: Al menos debe devolverse equipo, materiales o bobina
-      if (
-        datosDevolucion.equipos.length === 0 &&
-        Object.values(materialesDevueltos).every(v => !v || v <= 0) &&
-        datosDevolucion.metraje <= 0
-      ) {
+
+      const hayEquipos = datosDevolucion.equipos.length > 0;
+      const hayMats = Object.values(materialesDevueltos).some((v) => Number(v) > 0);
+      const hayMetros = Number(datosDevolucion.metraje) > 0;
+
+      if (!hayEquipos && !hayMats && !hayMetros) {
         toast.error("⚠️ Debes devolver al menos un equipo, material o bobina.");
+        setProcesando(false);
+        toast.dismiss(toastId);
         return;
       }
-  
-      // 2️⃣ Actualización de equipos
+
+      // 1) Equipos -> a almacén + guia_devolucion
       for (const eq of datosDevolucion.equipos) {
         const snap = await getDocs(collection(db, "equipos"));
-        const docEncontrado = snap.docs.find(d => d.data().SN === eq.SN);
-  
-        if (docEncontrado) {
-          const equipoRef = doc(db, "equipos", docEncontrado.id);
-          batch.update(equipoRef, {
-            estado: "almacen",
-            ubicacion: "almacen",
-            f_despacho: null,
-            usuario_despacho: null,
-            tecnicos: []
-          });
-  
-          const stockEquipoRef = doc(db, `cuadrillas/${datosDevolucion.cuadrillaId}/stock_equipos`, eq.SN);
-          batch.delete(stockEquipoRef);
+        const d = snap.docs.find((x) => x.data().SN === eq.SN);
+        if (d) {
+          batch.set(
+            doc(db, "equipos", d.id),
+            {
+              estado: "almacen",
+              ubicacion: "almacen",
+              f_despacho: null,
+              usuario_despacho: null,
+              tecnicos: [],
+              guia_devolucion: guiaId, // ✅
+            },
+            { merge: true }
+          );
+          batch.delete(doc(db, `cuadrillas/${datosDevolucion.cuadrillaId}/stock_equipos`, eq.SN));
         }
       }
-  
-      // 3️⃣ Actualización de materiales
-      for (const [nombre, cantidad] of Object.entries(materialesDevueltos)) {
-        if (!cantidad || cantidad <= 0) continue;
-  
-        const almacenRef = doc(db, "materiales_stock", nombre);
-        const cuadrillaRef = doc(db, `cuadrillas/${datosDevolucion.cuadrillaId}/stock_materiales`, nombre);
-  
-        batch.update(almacenRef, {
-          cantidad: increment(cantidad),
-          actualizadoPor: datosDevolucion.usuario,
-          actualizadoEn: new Date()
-        });
-  
-        batch.update(cuadrillaRef, {
-          cantidad: increment(-cantidad),
-          actualizadoPor: datosDevolucion.usuario,
-          actualizadoEn: new Date()
-        });
+
+      // 2) Materiales -> suman almacén y restan cuadrilla
+      for (const [nombre, cantidadRaw] of Object.entries(materialesDevueltos)) {
+        const cantidad = Number(cantidadRaw) || 0;
+        if (cantidad <= 0) continue;
+
+        const almRef = doc(db, "materiales_stock", nombre);
+        const almSnap = await getDoc(almRef);
+        const almActual = almSnap.exists() ? Number(almSnap.data().cantidad || 0) : 0;
+        batch.set(
+          almRef,
+          {
+            nombre,
+            cantidad: almActual + cantidad,
+            actualizadoPor: datosDevolucion.usuario,
+            actualizadoEn: serverTimestamp(),
+          },
+          { merge: true }
+        );
+
+        const cuaRef = doc(db, `cuadrillas/${datosDevolucion.cuadrillaId}/stock_materiales`, nombre);
+        const cuaSnap = await getDoc(cuaRef);
+        const cuaActual = cuaSnap.exists() ? Number(cuaSnap.data().cantidad || 0) : 0;
+        batch.set(
+          cuaRef,
+          {
+            nombre,
+            cantidad: Math.max(0, cuaActual - cantidad),
+            actualizadoPor: datosDevolucion.usuario,
+            actualizadoEn: serverTimestamp(),
+          },
+          { merge: true }
+        );
       }
-  
-      // 4️⃣ Manejo de DRUMP (Residencial)
-      if (datosDevolucion.tipo === "Residencial" && datosDevolucion.drump && datosDevolucion.metraje > 0) {
-        await procesarDevolucionBobinaResidencial(batch);
+
+      // 3) DRUMP / Metros
+      if (datosDevolucion.tipo === "Residencial" && datosDevolucion.drump && Number(datosDevolucion.metraje) > 0) {
+        await procesarDevolucionBobinaResidencial(batch, guiaId); // ✅ pasa guiaId
       }
-      
-  
-      // 5️⃣ Si es Condominio y hay metraje
-      if (datosDevolucion.tipo === "Condominio" && datosDevolucion.metraje > 0) {
-        const bobinaAlmacenRef = doc(db, "materiales_stock", "bobina");
-        batch.update(bobinaAlmacenRef, {
-          cantidad: increment(datosDevolucion.metraje),
-          actualizadoPor: datosDevolucion.usuario,
-          actualizadoEn: new Date()
-        });
-  
-        const bobinaCuadrillaRef = doc(db, `cuadrillas/${datosDevolucion.cuadrillaId}/stock_materiales`, "bobina");
-        batch.update(bobinaCuadrillaRef, {
-          cantidad: increment(-datosDevolucion.metraje),
-          actualizadoPor: datosDevolucion.usuario,
-          actualizadoEn: new Date()
-        });
+
+      if (datosDevolucion.tipo === "Condominio" && Number(datosDevolucion.metraje) > 0) {
+        const metros = Number(datosDevolucion.metraje) || 0;
+
+        // almacén bobina
+        const bobAlmRef = doc(db, "materiales_stock", "bobina");
+        const almSnap = await getDoc(bobAlmRef);
+        const almActual = almSnap.exists() ? Number(almSnap.data().cantidad || 0) : 0;
+        batch.set(
+          bobAlmRef,
+          {
+            nombre: "bobina",
+            cantidad: almActual + metros,
+            actualizadoPor: datosDevolucion.usuario,
+            actualizadoEn: serverTimestamp(),
+          },
+          { merge: true }
+        );
+
+        // cuadrilla bobina
+        const bobCuaRef = doc(db, `cuadrillas/${datosDevolucion.cuadrillaId}/stock_materiales`, "bobina");
+        const cuaSnap = await getDoc(bobCuaRef);
+        const cuaActual = cuaSnap.exists() ? Number(cuaSnap.data().cantidad || 0) : 0;
+        batch.set(
+          bobCuaRef,
+          {
+            nombre: "bobina",
+            cantidad: Math.max(0, cuaActual - metros),
+            actualizadoPor: datosDevolucion.usuario,
+            actualizadoEn: serverTimestamp(),
+          },
+          { merge: true }
+        );
       }
-  
-      // 6️⃣ Confirmar batch
+
       await batch.commit();
-  
-      // 7️⃣ Guardar la guía
+
+      // 4) Guardar guía
       const datosFinal = {
         ...datosDevolucion,
         guiaId,
         materiales: materialesDevueltos,
-        tecnicosUID: tecnicos,  // <-- Asegúrate que esto esté presente
-        f_registro: new Date()
+        tecnicosUID: tecnicos,
+        f_registro: serverTimestamp(),
       };
-      
-  
       await addDoc(collection(db, "guias_devolucion"), datosFinal);
-      toast.success("✅ Devolución registrada correctamente.");
-  
-      const urlComprobante = await generarPDFDevolucion(guiaId, datosFinal);
-      toast.success("📄 PDF generado correctamente");
 
-      // 🚨 Crear Notificación de Devolución
+      // 5) PDF + Notificación
+      const urlComprobante = await generarPDFDevolucion(guiaId, datosFinal);
+
       await addDoc(collection(db, "notificaciones"), {
         tipo: "Devolución",
-        mensaje: `🔄 ${datosFinal.usuario} registró devolución de la cuadrilla "${datosFinal.cuadrillaNombre}". Equipos: ${datosFinal.equipos.length}, Materiales: ${Object.values(datosFinal.materiales).reduce((a, b) => a + b, 0)}, Metros: ${datosFinal.metraje || 0}`,
+        mensaje: `🔄 ${datosFinal.usuario} registró devolución de "${datosFinal.cuadrillaNombre}". Equipos: ${
+          datosFinal.equipos.length
+        }, Materiales: ${Object.values(datosFinal.materiales || {}).reduce((a, b) => a + (Number(b) || 0), 0)}, Metros: ${
+          datosFinal.metraje || 0
+        }`,
         usuario: datosFinal.usuario,
         fecha: serverTimestamp(),
         guiaId: datosFinal.guiaId,
-        link: urlComprobante,   // ✅ Aquí agregas el link del PDF
+        link: urlComprobante,
         detalles: {
           cuadrilla: datosFinal.cuadrillaNombre,
           tipo: datosFinal.tipo,
           equipos: datosFinal.equipos,
           materiales: datosFinal.materiales,
           drump: datosFinal.drump || "",
-          metraje: datosFinal.metraje || 0
+          metraje: datosFinal.metraje || 0,
         },
-        visto: false
+        visto: false,
       });
-      
 
-toast.success("🔔 Notificación de devolución registrada");
- 
-  
-      // 🔹 5. Limpiar todos los estados
-    setCuadrilla("");
-    setListaEquipos([]);
-    setMaterialesDevueltos({});
-    setDatosDevolucion({
-      cuadrillaId: "",
-      cuadrillaNombre: "",
-      tipo: "",
-      tecnicos: [],
-      equipos: [],
-      drump: "",
-      metraje: 0,
-      observacion: "",
-      usuario: userData?.nombres + " " + userData?.apellidos || "",
-      fecha: new Date()
-    });
-    setSn("");
-    setErrorSn("");
-    setTecnicos([]);
-    setBobinasActivas([]);
+      toast.success("✅ Devolución registrada correctamente.");
 
-    inputRef.current?.focus();
-
-    toast.success("✅ Devolución registrada correctamente", { id: toastId });
-  } catch (error) {
-    console.error("Error al registrar devolución:", error);
-    toast.error("❌ Error al registrar la devolución.", { id: toastId });
-  } finally {
-    setProcesando(false);
-  }
-};
-  
-  
-  
-  
-  
-
-  
-
-  const handleScan = async (e) => {
-    const codigo = e.target.value.trim();
-
-    if ((e.key === "Enter" || e.nativeEvent?.inputType === "insertLineBreak") && codigo) {
-      if (listaEquipos.some(eq => eq.SN === codigo)) {
-        setErrorSn("⚠️ Este SN ya ha sido escaneado.");
-        setSn("");
-        return;
-      }
-
-      const snap = await getDocs(collection(db, "equipos"));
-      const encontrado = snap.docs.find(doc => doc.data().SN === codigo);
-
-      if (!encontrado) {
-        setErrorSn("❌ Este SN no se encuentra en la base de datos.");
-        setSn("");
-        return;
-      }
-
-      const data = encontrado.data();
-
-      if (data.estado !== "campo" && data.estado !== "instalado") {
-        setErrorSn("⚠️ Solo se pueden devolver equipos que estén en campo o instalados.");
-        setSn("");
-        return;
-      }
-      
-
-      if (data.ubicacion !== datosDevolucion.cuadrillaNombre) {
-        setErrorSn(`⚠️ Este equipo no pertenece a la cuadrilla ${datosDevolucion.cuadrillaNombre}.`);
-        setSn("");
-        return;
-      }
-
-      const nuevo = {
-        SN: data.SN,
-        equipo: data.equipo,
-        descripcion: data.descripcion
-      };
-
-      setListaEquipos(prev => [...prev, nuevo]);
-      setDatosDevolucion(prev => ({ ...prev, equipos: [...prev.equipos, nuevo] }));
-
-      setErrorSn("");
+      // Reset UI
+      setShowPreview(false);
+      setCuadrilla("");
+      setListaEquipos([]);
+      setMaterialesDevueltos({});
+      setDatosDevolucion({
+        cuadrillaId: "",
+        cuadrillaNombre: "",
+        tipo: "",
+        tecnicos: [],
+        equipos: [],
+        drump: "",
+        metraje: 0,
+        observacion: "",
+        usuario:
+          `${userData?.nombres || ""} ${userData?.apellidos || ""}`.trim() ||
+          user?.email ||
+          "Usuario",
+        fecha: new Date(),
+      });
       setSn("");
+      setErrorSn("");
+      setTecnicos([]);
+      setBobinasActivas([]);
+      inputRef.current?.focus();
+    } catch (err) {
+      console.error(err);
+      toast.error("❌ Error al registrar la devolución.");
+    } finally {
+      setProcesando(false);
     }
   };
 
-  const handleEliminar = (idx) => {
-    setListaEquipos(prev => prev.filter((_, i) => i !== idx));
-    setDatosDevolucion(prev => ({
-      ...prev,
-      equipos: prev.equipos.filter((_, i) => i !== idx)
-    }));
-  };
+  /* ======= Computados para previsualización ======= */
+  const totalMateriales = Object.values(materialesDevueltos || {}).reduce(
+    (a, b) => a + (Number(b) || 0), 0
+  );
+  const puedePrevisualizar =
+    !!datosDevolucion.cuadrillaId &&
+    (listaEquipos.length > 0 || totalMateriales > 0 || Number(datosDevolucion.metraje) > 0);
 
-
-
-
-
-
-
+  /* =======================
+     UI
+  ======================= */
   return (
-    <div className="p-6 max-w-3xl mx-auto">
-      <h1 className="text-2xl font-bold text-[#30518c] mb-4">📦 Devolución de Equipos</h1>
+    <div className="min-h-screen bg-gradient-to-b from-slate-50 to-slate-100 p-6">
+      <div className="max-w-4xl mx-auto">
+        <h1 className="text-2xl font-bold text-center mb-4">📦 Devolución de Equipos y Materiales</h1>
 
-      <input
-        list="cuadrillas"
-        placeholder="Selecciona cuadrilla"
-        className="w-full border rounded px-3 py-2 mb-3"
-        value={cuadrilla}
-        onChange={(e) => setCuadrilla(e.target.value)}
-      />
-      <datalist id="cuadrillas">
-        {listaCuadrillas.map(c => <option key={c.id} value={c.nombre} />)}
-      </datalist>
-
-      {tecnicos.length > 0 && (
-        <p className="mb-2 text-sm">👷 Técnicos: {tecnicos.map(getNombreCompleto).join(", ")}</p>
-      )}
-
-      <input
-        ref={inputRef}
-        value={sn}
-        onChange={(e) => setSn(e.target.value)}
-        onKeyDown={handleScan}
-        onInput={(e) => {
-          if (e.nativeEvent?.inputType === "insertLineBreak") handleScan(e);
-        }}
-        placeholder="Escanear SN"
-        className="w-full border rounded px-3 py-2 mb-2"
-      />
-      {errorSn && <p className="text-sm text-red-600 mb-2">{errorSn}</p>}
-
-      {listaEquipos.length > 0 && (
-        <div className="mt-4 border rounded bg-white p-4 shadow">
-          <h2 className="font-semibold mb-2">📋 Equipos a devolver:</h2>
-          <table className="w-full text-sm border">
-            <thead className="bg-gray-200">
-              <tr>
-                <th className="p-2">SN</th>
-                <th className="p-2">Tipo</th>
-                <th className="p-2">Descripción</th>
-                <th className="p-2">Eliminar</th>
-              </tr>
-            </thead>
-            <tbody>
-              {listaEquipos.map((item, idx) => (
-                <tr key={idx} className="border-b">
-                  <td className="p-2">{item.SN}</td>
-                  <td className="p-2">{item.equipo}</td>
-                  <td className="p-2">{item.descripcion}</td>
-                  <td className="p-2">
-                    <button
-                      className="text-red-600 hover:underline"
-                      onClick={() => handleEliminar(idx)}
-                    >Eliminar</button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-{stockEquiposCuadrilla.length > 0 && (
-  <div className="mt-6 p-4 border rounded bg-white shadow">
-    <h2 className="text-lg font-semibold text-[#30518c] mb-2">🔧 Stock de Equipos en Cuadrilla</h2>
-    <ul className="list-disc pl-5 text-sm">
-      {stockEquiposCuadrilla.map(eq => (
-        <li key={eq.id}>
-          {eq.SN} - {eq.tipo}
-        </li>
-      ))}
-    </ul>
-  </div>
-)}
-
-
-
-{stockMaterialesCuadrilla.length > 0 && (
-  <div className="mt-6 p-4 border rounded bg-white shadow">
-    <h2 className="text-lg font-semibold text-[#30518c] mb-2">📦 Stock de Materiales en Cuadrilla</h2>
-    <ul className="list-disc pl-5 text-sm">
-  {stockMaterialesCuadrilla
-    .filter(mat => {
-      // Ocultar "bobina" solo si es Residencial
-      if (datosDevolucion.tipo === "Residencial" && mat.nombre === "bobina") return false;
-      return true;
-    })
-    .map(mat => (
-      <li key={mat.id}>
-        {mat.id === "bobina"
-          ? <>bobinas: <strong>{mat.cantidad} m</strong></>
-          : <>{mat.nombre.replaceAll("_", " ")}: <strong>{mat.cantidad}</strong></>
-        }
-      </li>
-    ))}
-</ul>
-
-  </div>
-)}
-
-
-
-      {/* Bloque 3: Devolución de bobina */}
-      {datosDevolucion.tipo === "Residencial" && (
-        <>
-          <div className="mb-4 mt-4">
-            <label className="block text-sm font-medium mb-1">Código DRUMP devuelto:</label>
-            <input
-              type="text"
-              placeholder="Ej: DRUMP-000123"
-              className="w-full border rounded px-3 py-2"
-              onChange={(e) => setDatosDevolucion(prev => ({
-                ...prev,
-                drump: e.target.value
-              }))}
-            />
-          </div>
-
-          <div className="mb-4">
-            <label className="block text-sm font-medium mb-1">Metros devueltos de esta bobina:</label>
-            <input
-              type="number"
-              min="0"
-              placeholder="Ej: 1480"
-              className="w-full border rounded px-3 py-2"
-              onChange={(e) => setDatosDevolucion(prev => ({
-                ...prev,
-                metraje: parseInt(e.target.value) || 0
-              }))}
-            />
-            <p className="text-xs text-gray-500 mt-1">Registrar los metros reales que quedan en la bobina (o 0 si está vacía).</p>
-          </div>
-        </>
-      )}
-
-
-{/* Mostrar DRUMPs solo para Residencial */}
-{datosDevolucion.tipo === "Residencial" && bobinasActivas.length > 0 && (
-  <div className="mt-4 border p-3 rounded bg-white shadow">
-    <h3 className="text-sm font-semibold mb-2 text-[#30518c]">🎗️ Bobinas DRUMP en Cuadrilla</h3>
-    <table className="w-full text-sm border">
-      <thead className="bg-gray-100">
-        <tr>
-          <th className="p-1 text-left">Código</th>
-          <th className="p-1 text-right">Metros</th>
-        </tr>
-      </thead>
-      <tbody>
-        {bobinasActivas.map((b, i) => (
-          <tr key={i} className="border-t">
-            <td className="p-1">{b.codigo}</td>
-            <td className="p-1 text-right">{b.metros}</td>
-          </tr>
-        ))}
-        {/* Total de metros */}
-        <tr className="border-t font-bold bg-gray-50">
-          <td className="p-1 text-right">Total:</td>
-          <td className="p-1 text-right">
-            {bobinasActivas.reduce((total, b) => total + (b.metros || 0), 0)} m
-          </td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-)}
-
-
-
-      {datosDevolucion.tipo === "Condominio" && (
-        <div className="mb-4 mt-4">
-          <label className="block text-sm font-medium mb-1">Metros devueltos:</label>
+        {/* Cuadrilla */}
+        <div className="flex gap-2 mb-3">
           <input
-            type="number"
-            min="0"
-            placeholder="Ej: 180"
-            className="w-full border rounded px-3 py-2"
-            onChange={(e) => setDatosDevolucion(prev => ({
-              ...prev,
-              metraje: parseInt(e.target.value) || 0
-            }))}
+            list="cuadrillas"
+            placeholder="Selecciona cuadrilla"
+            className="w-full border rounded-2xl px-3 h-11"
+            value={cuadrilla}
+            onChange={(e) => setCuadrilla(e.target.value)}
           />
-          <p className="text-xs text-gray-500 mt-1">Indica la cantidad real de metros devueltos.</p>
+          <datalist id="cuadrillas">
+            {listaCuadrillas.map((c) => (
+              <option key={c.id} value={c.nombre} />
+            ))}
+          </datalist>
         </div>
-      )}
 
-      {/* Bloque 4: Materiales complementarios */}
-      <div className="mt-6 p-4 border rounded bg-white shadow-sm">
-        <h2 className="text-lg font-semibold text-[#30518c] mb-2">📥 Materiales Devueltos</h2>
-        <p className="text-sm text-gray-600 mb-3">Registra la cantidad real devuelta por material.</p>
+        {tecnicos.length > 0 && (
+          <div className="mb-4 text-sm bg-white rounded-2xl p-3 border">
+            <div><b>Cuadrilla:</b> {datosDevolucion.cuadrillaNombre}</div>
+            <div><b>Tipo:</b> {datosDevolucion.tipo || "—"}</div>
+            <div><b>Técnicos:</b> {tecnicos.map(getNombreCompleto).join(", ")}</div>
+          </div>
+        )}
 
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-          {materialesDisponibles.map((nombre) => (
-            <div key={nombre}>
-              <label className="block text-sm capitalize text-gray-700">
-                {nombre.replaceAll("_", " ")}:
-              </label>
+        {/* Scan SN */}
+        <div className="flex gap-2">
+          <input
+            ref={inputRef}
+            value={sn}
+            onChange={(e) => setSn(e.target.value.toUpperCase())}
+            onKeyDown={handleScan}
+            onInput={(e) => {
+              if (e.nativeEvent?.inputType === "insertLineBreak") handleScan(e);
+            }}
+            placeholder="Escanear / ingresar SN"
+            className="w-full border rounded-2xl px-3 h-11"
+          />
+          <button
+            className="px-4 rounded-2xl h-11 bg-gradient-to-r from-indigo-600 to-blue-600 text-white hover:from-indigo-700 hover:to-blue-700"
+            onClick={() => handleScan({ key: "Enter", target: { value: sn } })}
+          >
+            Agregar
+          </button>
+        </div>
+        {errorSn && <p className="text-sm text-red-600 mt-1">{errorSn}</p>}
+
+        {/* Equipos list */}
+        {listaEquipos.length > 0 && (
+          <div className="mt-4 border rounded-2xl bg-white p-4 shadow-sm">
+            <h2 className="font-semibold mb-2">📋 Equipos a devolver</h2>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm border">
+                <thead className="bg-gray-100">
+                  <tr>
+                    <th className="p-2 text-left">SN</th>
+                    <th className="p-2 text-left">Tipo</th>
+                    <th className="p-2 text-left">Descripción</th>
+                    <th className="p-2 text-right">Acción</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {listaEquipos.map((item, idx) => (
+                    <tr key={item.SN} className="border-t">
+                      <td className="p-2">{item.SN}</td>
+                      <td className="p-2">{item.equipo}</td>
+                      <td className="p-2">{item.descripcion}</td>
+                      <td className="p-2 text-right">
+                        <button className="text-red-600 hover:underline" onClick={() => handleEliminarEquipo(idx)}>
+                          Eliminar
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* Stocks */}
+        {stockEquiposCuadrilla.length > 0 && (
+          <div className="mt-6 p-4 border rounded-2xl bg-white shadow-sm">
+            <h2 className="text-lg font-semibold text-[#30518c] mb-2">🔧 Stock de Equipos en Cuadrilla</h2>
+            <ul className="list-disc pl-5 text-sm">
+              {stockEquiposCuadrilla.map((eq) => (
+                <li key={eq.id}>{eq.SN} - {eq.tipo}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {stockMaterialesCuadrilla.length > 0 && (
+          <div className="mt-6 p-4 border rounded-2xl bg-white shadow-sm">
+            <h2 className="text-lg font-semibold text-[#30518c] mb-2">📦 Stock de Materiales en Cuadrilla</h2>
+            <ul className="list-disc pl-5 text-sm">
+              {stockMaterialesCuadrilla
+                .filter((m) => !(datosDevolucion.tipo === "Residencial" && m.nombre === "bobina"))
+                .map((m) => (
+                  <li key={m.id}>
+                    {m.id === "bobina"
+                      ? <>bobinas: <strong>{m.cantidad} m</strong></>
+                      : <>{(m.nombre || m.id).replaceAll("_", " ")}: <strong>{m.cantidad}</strong></>}
+                  </li>
+                ))}
+            </ul>
+          </div>
+        )}
+
+        {/* DRUMP / Metros */}
+        {datosDevolucion.tipo === "Residencial" && (
+          <div className="mt-6 grid md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium mb-1">Código DRUMP devuelto:</label>
+              <input
+                type="text"
+                placeholder="Ej: WIN-4242"
+                className="w-full border rounded-2xl px-3 h-11"
+                value={datosDevolucion.drump}
+                onChange={(e) => setDatosDevolucion((p) => ({ ...p, drump: e.target.value.toUpperCase() }))}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">Metros devueltos de esta bobina:</label>
               <input
                 type="number"
                 min="0"
-                className="w-full border rounded px-2 py-1 text-sm"
-                value={materialesDevueltos[nombre] || ""}
-                onChange={(e) => {
-                  const cantidad = parseInt(e.target.value);
-                  setMaterialesDevueltos((prev) => ({
-                    ...prev,
-                    [nombre]: isNaN(cantidad) ? "" : cantidad
-                  }));
-                }}
+                className="w-full border rounded-2xl px-3 h-11
+                  [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                value={datosDevolucion.metraje || ""}
+                onChange={(e) => setDatosDevolucion((p) => ({ ...p, metraje: parseInt(e.target.value) || 0 }))}
               />
+              <p className="text-xs text-gray-500 mt-1">Registra los metros que retornan al almacén.</p>
             </div>
-          ))}
+          </div>
+        )}
+
+        {datosDevolucion.tipo === "Residencial" && bobinasActivas.length > 0 && (
+          <div className="mt-4 border p-3 rounded-2xl bg-white shadow-sm">
+            <h3 className="text-sm font-semibold mb-2 text-[#30518c]">🎗️ Bobinas DRUMP en Cuadrilla</h3>
+            <table className="w-full text-sm border rounded-lg overflow-hidden">
+              <thead className="bg-gray-100">
+                <tr>
+                  <th className="p-2 text-left">Código</th>
+                  <th className="p-2 text-right">Metros</th>
+                </tr>
+              </thead>
+              <tbody>
+                {bobinasActivas.map((b, i) => (
+                  <tr key={i} className="border-t">
+                    <td className="p-2">{b.codigo}</td>
+                    <td className="p-2 text-right">{b.metros}</td>
+                  </tr>
+                ))}
+                <tr className="border-t font-bold bg-gray-50">
+                  <td className="p-2 text-right">Total:</td>
+                  <td className="p-2 text-right">
+                    {bobinasActivas.reduce((t, b) => t + (b.metros || 0), 0)} m
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {datosDevolucion.tipo === "Condominio" && (
+          <div className="mt-6">
+            <label className="block text-sm font-medium mb-1">Metros devueltos:</label>
+            <input
+              type="number"
+              min="0"
+              className="w-full border rounded-2xl px-3 h-11
+                [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+              value={datosDevolucion.metraje || ""}
+              onChange={(e) => setDatosDevolucion((p) => ({ ...p, metraje: parseInt(e.target.value) || 0 }))}
+            />
+          </div>
+        )}
+
+        {/* Materiales Devueltos */}
+        <div className="mt-6 p-4 border rounded-2xl bg-white shadow-sm">
+          <h2 className="text-lg font-semibold text-[#30518c] mb-2">📥 Materiales Devueltos</h2>
+          <p className="text-sm text-gray-600 mb-3">Registra la cantidad real devuelta por material (editable).</p>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+            {materialesDisponibles.map((nombre) => (
+              <div key={nombre} className="flex items-center justify-between gap-3">
+                <label className="text-sm capitalize">{nombre.replaceAll("_", " ")}:</label>
+                <input
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  className="w-24 text-right bg-white border border-slate-300 rounded-xl px-2 py-1.5
+                    [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none
+                    focus:outline-none focus:ring-2 focus:ring-indigo-300 focus:border-indigo-400"
+                  value={materialesDevueltos[nombre] ?? 0}
+                  onChange={(e) => {
+                    const raw = e.target.value.replace(/\D/g, "");
+                    setMaterialesDevueltos((prev) => ({
+                      ...prev,
+                      [nombre]: raw === "" ? 0 : Number(raw),
+                    }));
+                  }}
+                />
+              </div>
+            ))}
+          </div>
         </div>
 
-          
+        {/* Observaciones */}
+        <div className="mt-6">
+          <label className="block text-sm font-medium mb-1">📝 Observaciones</label>
+          <textarea
+            rows={3}
+            className="w-full border rounded-2xl p-3"
+            placeholder="Sin observaciones"
+            value={datosDevolucion.observacion}
+            onChange={(e) =>
+              setDatosDevolucion((prev) => ({
+                ...prev,
+                observacion: e.target.value,
+              }))
+            }
+          />
+        </div>
 
+        {/* Botón Previsualizar */}
+        <div className="mt-6">
+          <button
+            className={`w-full h-11 rounded-2xl font-semibold text-white shadow ${
+              !puedePrevisualizar || procesando
+                ? "bg-gray-300 cursor-not-allowed"
+                : "bg-gradient-to-r from-fuchsia-500 via-indigo-500 to-blue-500 hover:opacity-95"
+            }`}
+            onClick={() => {
+              if (!puedePrevisualizar || procesando) return;
+              const v = validarStockAntesDeRegistrar(); // ✅ validar antes de abrir modal
+              if (v.ok) setShowPreview(true);
+            }}
+            disabled={!puedePrevisualizar || procesando}
+          >
+            {procesando ? "Procesando..." : "👀 Previsualizar y Confirmar"}
+          </button>
+        </div>
+
+        {/* ========== MODAL PREVIEW ========== */}
+        {showPreview && (
+          <div className="fixed inset-0 z-40 flex items-end md:items-center justify-center">
+            <div
+              className="absolute inset-0 bg-black/40"
+              onClick={() => !procesando && setShowPreview(false)}
+            />
+            <div className="relative z-50 bg-white w-full md:max-w-2xl md:rounded-2xl shadow-xl max-h-[90vh] overflow-hidden">
+              <div className="px-4 py-3 bg-gradient-to-r from-indigo-600 to-blue-600 text-white">
+                <h3 className="font-semibold">Previsualización de Devolución</h3>
+                <p className="text-xs opacity-90">Verifica antes de registrar</p>
+              </div>
+
+              <div className="p-4 space-y-4 overflow-y-auto max-h-[70vh]">
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div><b>Cuadrilla:</b> {datosDevolucion.cuadrillaNombre}</div>
+                  <div><b>Tipo:</b> {datosDevolucion.tipo}</div>
+                  <div className="col-span-2">
+                    <b>Técnicos:</b> {(datosDevolucion.tecnicos || []).join(", ") || "—"}
+                  </div>
+                </div>
+
+                {listaEquipos.length > 0 && (
+                  <div>
+                    <h4 className="font-semibold mb-1 text-sm">Equipos ({listaEquipos.length})</h4>
+                    <table className="w-full text-xs border rounded">
+                      <thead className="bg-gray-100">
+                        <tr>
+                          <th className="p-2 text-left">SN</th>
+                          <th className="p-2 text-left">Tipo</th>
+                          <th className="p-2 text-left">Descripción</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {listaEquipos.map((e) => (
+                          <tr key={e.SN} className="border-t">
+                            <td className="p-2">{e.SN}</td>
+                            <td className="p-2">{e.equipo}</td>
+                            <td className="p-2">{e.descripcion}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                {(datosDevolucion.metraje > 0 || datosDevolucion.drump) && (
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    {datosDevolucion.drump && <div><b>DRUMP:</b> {datosDevolucion.drump}</div>}
+                    {datosDevolucion.metraje > 0 && <div><b>Metros:</b> {datosDevolucion.metraje} m</div>}
+                  </div>
+                )}
+
+                {totalMateriales > 0 && (
+                  <div>
+                    <h4 className="font-semibold mb-1 text-sm">Materiales devueltos</h4>
+                    <ul className="text-sm list-disc pl-5">
+                      {Object.entries(materialesDevueltos)
+                        .filter(([, v]) => Number(v) > 0)
+                        .map(([k, v]) => (
+                          <li key={k} className="capitalize">
+                            {k.replaceAll("_", " ")}: <b>{v}</b>
+                          </li>
+                        ))}
+                    </ul>
+                  </div>
+                )}
+
+                <div className="text-sm">
+                  <b>Observaciones:</b>{" "}
+                  {datosDevolucion.observacion?.trim() || "Sin observaciones"}
+                </div>
+              </div>
+
+              <div className="p-4 flex items-center justify-end gap-3 border-t">
+                <button
+                  className="px-4 h-10 rounded-2xl bg-gray-200 hover:bg-gray-300"
+                  onClick={() => !procesando && setShowPreview(false)}
+                  disabled={procesando}
+                >
+                  Cancelar
+                </button>
+                <button
+                  className={`px-4 h-10 rounded-2xl text-white font-semibold ${
+                    procesando
+                      ? "bg-gray-400 cursor-not-allowed"
+                      : "bg-emerald-600 hover:bg-emerald-700"
+                  }`}
+                  onClick={handleRegistrarDevolucion}
+                  disabled={procesando}
+                >
+                  {procesando ? "Registrando..." : "Confirmar y Registrar"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+        {/* ========== /MODAL PREVIEW ========== */}
       </div>
-
-          {/* Observaciones */}
-<div className="mt-6">
-  <label className="block text-sm font-medium text-gray-700 mb-1">📝 Observaciones:</label>
-  <textarea
-    rows={2}
-    className="w-full border rounded px-3 py-2 text-sm"
-    placeholder="Sin observaciones"
-    value={datosDevolucion.observacion}
-    onChange={(e) =>
-      setDatosDevolucion((prev) => ({
-        ...prev,
-        observacion: e.target.value || "Sin observaciones"
-      }))
-    }
-  />
-</div>
-
-
-
-      <div className="mt-6 flex flex-wrap gap-4">
-  <button
-    className={`px-6 py-2 rounded flex items-center gap-2 font-semibold ${
-      procesando 
-        ? "bg-gray-400 cursor-not-allowed" 
-        : "bg-[#30518c] text-white hover:bg-[#203960]"
-    }`}
-    onClick={handleRegistrarDevolucion}
-    disabled={procesando}
-  >
-    {procesando ? "Registrando..." : "✅ Registrar Devolución"}
-  </button>
-</div>
-
-
     </div>
-    
   );
 }
