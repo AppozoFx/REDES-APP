@@ -22,6 +22,8 @@ dayjs.extend(durationPlugin);
 ========================= */
 const COLORS = ["#6366f1", "#10b981", "#f43f5e", "#f59e0b", "#3b82f6", "#14b8a6", "#8b5cf6", "#ec4899", "#22c55e", "#eab308"];
 
+
+
 function Card({ title, right, children }) {
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
@@ -124,23 +126,94 @@ const MapInstalaciones = dynamic(
    Página
 ========================= */
 export default function Dashboard() {
-
-  // completa lo escrito con la primera coincidencia (exacta o parcial)
-const completarCuadrilla = () => {
-  const q = norm(qCuadrilla);
-  if (!q) { setFCuadrilla(""); return; }
-  const exact = opcionesCuadrilla.find(o => norm(o) === q);
-  const parcial = opcionesCuadrilla.find(o => norm(o).includes(q));
-  const pick = exact || parcial || "";
-  setQCuadrilla(pick);
-  setFCuadrilla(pick);
-};
-
   const { user, initializing } = useAuth();
 
-  const [fecha, setFecha] = useState(dayjs().format("YYYY-MM-DD"));
-  const fechaAyer = useMemo(() => dayjs(fecha).subtract(1, "day").format("YYYY-MM-DD"), [fecha]);
+  /* --------- Fecha / Período --------- */
+  // tipo: dia | semana | semanas | mes
+  const [rangoTipo, setRangoTipo] = useState("dia");
+  const hoyYMD = dayjs().format("YYYY-MM-DD");
+  const [fechaDia, setFechaDia] = useState(hoyYMD);
+  const [semana, setSemana] = useState(dayjs().format("YYYY-[W]WW"));          // p.ej. 2025-W09
+  const [semanaIni, setSemanaIni] = useState(dayjs().format("YYYY-[W]WW"));    // para "semanas"
+  const [semanaFin, setSemanaFin] = useState(dayjs().format("YYYY-[W]WW"));
+  const [mesVal, setMesVal] = useState(dayjs().format("YYYY-MM"));             // p.ej. 2025-09
 
+  // Helpers de semana ISO (sin plugin)
+  const parseWeekValue = (val) => {
+    const m = /^(\d{4})-W(\d{1,2})$/.exec(String(val || ""));
+    if (!m) return null;
+    return { year: Number(m[1]), week: Number(m[2]) };
+  };
+  const isoWeekStart = ({ year, week }) => {
+    const d4 = dayjs(new Date(year, 0, 4));
+    const startWeek1 = d4.startOf("week").add(1, "day"); // Monday
+    return startWeek1.add((week - 1) * 7, "day");
+  };
+
+  const periodo = useMemo(() => {
+    let start, end, etiqueta;
+    if (rangoTipo === "dia") {
+      start = dayjs(fechaDia);
+      end = start;
+    } else if (rangoTipo === "semana") {
+      const pw = parseWeekValue(semana);
+      if (pw) {
+        start = isoWeekStart(pw);
+        end = start.add(6, "day");
+      } else {
+        start = dayjs(fechaDia).startOf("week").add(1, "day");
+        end = start.add(6, "day");
+      }
+    } else if (rangoTipo === "semanas") {
+      const a = parseWeekValue(semanaIni);
+      const b = parseWeekValue(semanaFin);
+      let s = a ? isoWeekStart(a) : dayjs(fechaDia).startOf("week").add(1, "day");
+      let e = b ? isoWeekStart(b).add(6, "day") : s.add(6, "day");
+      if (e.isBefore(s)) [s, e] = [e, s];
+      start = s; end = e;
+    } else {
+      const base = dayjs(`${mesVal}-01`);
+      start = base.startOf("month");
+      end = base.endOf("month");
+    }
+    etiqueta = `${start.format("YYYY-MM-DD")} — ${end.format("YYYY-MM-DD")}`;
+    return { start, end, etiqueta };
+  }, [rangoTipo, fechaDia, semana, semanaIni, semanaFin, mesVal]);
+
+  const periodoPrev = useMemo(() => {
+    let start, end;
+    if (rangoTipo === "dia") {
+      start = periodo.start.subtract(1, "day");
+      end = periodo.end.subtract(1, "day");
+    } else if (rangoTipo === "semana") {
+      start = periodo.start.subtract(7, "day");
+      end = periodo.end.subtract(7, "day");
+    } else if (rangoTipo === "semanas") {
+      const dias = periodo.end.diff(periodo.start, "day") + 1;
+      start = periodo.start.subtract(dias, "day");
+      end = periodo.end.subtract(dias, "day");
+    } else {
+      start = periodo.start.subtract(1, "month").startOf("month");
+      end = periodo.start.subtract(1, "month").endOf("month");
+    }
+    return { start, end };
+  }, [periodo, rangoTipo]);
+
+  const fechasDe = (p) => {
+    const out = [];
+    let d = p.start;
+    while (d.diff(p.end, "day") <= 0) {
+      out.push(d.format("YYYY-MM-DD"));
+      d = d.add(1, "day");
+    }
+    return out;
+  };
+  const fechasSel = useMemo(() => fechasDe(periodo), [periodo]);
+  const fechasPrev = useMemo(() => fechasDe(periodoPrev), [periodoPrev]);
+
+  const fechaRef = periodo.end.format("YYYY-MM-DD");
+
+  /* --------- datos base --------- */
   const [cargando, setCargando] = useState(false);
   const montado = useRef(true);
 
@@ -150,12 +223,13 @@ const completarCuadrilla = () => {
   const [instalacionesAll, setInstalacionesAll] = useState([]);
   const [usuariosIdx, setUsuariosIdx] = useState({}); // uid -> datos usuario
 
-  // filtros (basados en instalaciones)
+  // filtros (basados en instalaciones/asistencia)
   const [fZona, setFZona] = useState("");
+  const [fRegion, setFRegion] = useState("");
+  const [fTipoCuadrilla, setFTipoCuadrilla] = useState("");
   const [fGestor, setFGestor] = useState("");
   const [fCoordinador, setFCoordinador] = useState("");
-  const [fCuadrilla, setFCuadrilla] = useState(""); // cuadrillaNombre
-  const [qCuadrilla, setQCuadrilla] = useState(""); // <-- buscador de cuadrilla
+  const [fCuadrilla, setFCuadrilla] = useState(""); // texto libre
 
   // metas
   const [metaInstalaciones, setMetaInstalaciones] = useState(100);
@@ -163,8 +237,14 @@ const completarCuadrilla = () => {
 
   const [showAvanzado, setShowAvanzado] = useState(false);
 
-  // --- utils de normalización ---
+  // --- utils ---
   const norm = (v) => String(v ?? "").toLowerCase().trim();
+  // normalizador robusto de nombre de cuadrilla (quita prefijo c_, guiones, múltiples espacios, etc.)
+  const normCuad = (v) => String(v ?? "")
+    .toLowerCase()
+    .replace(/^c_/, "")
+    .replace(/[\W_]+/g, " ")
+    .trim();
 
   useEffect(() => {
     montado.current = true;
@@ -198,7 +278,6 @@ const completarCuadrilla = () => {
           return { id: d.id, ...raw, _fechaYMD, _cuadrillaNombre };
         });
 
-        // usuarios (para traducir UID -> nombre)
         const snapU = await getDocs(collection(db, "usuarios"));
         const idxU = {};
         snapU.docs.forEach(d => { idxU[d.id] = d.data(); });
@@ -231,7 +310,6 @@ const completarCuadrilla = () => {
     return "";
   };
 
-  // traductor UID -> nombre visible (si no existe en índice, devuelve el valor tal cual)
   const personaDe = (v) => {
     const s = String(v ?? "").trim();
     if (!s) return "";
@@ -246,250 +324,369 @@ const completarCuadrilla = () => {
     );
   };
 
+  const setFechas = new Set(fechasSel);
+  const setFechasPrev = new Set(fechasPrev);
+
   /* =========================
-     Base de HOY (instalaciones)
+     Base del PERÍODO (instalaciones)
   ========================== */
-  const instalacionesHoyBase = useMemo(
-    () => instalacionesAll.filter(i => i._fechaYMD === fecha),
-    [instalacionesAll, fecha]
+  const instalacionesPeriodoBase = useMemo(
+    () => instalacionesAll.filter(i => setFechas.has(i._fechaYMD)),
+    [instalacionesAll, setFechas, fechasSel.join("|")]
   );
 
-  // Índice asistencia por nombre de cuadrilla (normalizado)
-  const asistenciaHoyBase = useMemo(
-    () => asistenciaCuadrillasAll.filter(c => c.fecha === fecha),
-    [asistenciaCuadrillasAll, fecha]
+  // Índice asistencia por nombre de cuadrilla para el período (por si hace falta meta)
+  const asistenciaPeriodoBase = useMemo(
+    () => asistenciaCuadrillasAll.filter(c => setFechas.has(c.fecha)),
+    [asistenciaCuadrillasAll, setFechas, fechasSel.join("|")]
   );
-  const idxAsistenciaByNombre = useMemo(() => {
-    const idx = {};
-    for (const c of asistenciaHoyBase) {
-      const k = norm(c?.nombre);
-      if (k) idx[k] = c;
-    }
-    return idx;
-  }, [asistenciaHoyBase]);
 
-  // Enriquecer instalaciones con zona/gestor/coordinador (si faltan) traduciendo UID->nombre
-  const instalacionesHoyEnriquecidas = useMemo(() => {
-    return instalacionesHoyBase.map(i => {
-      const key  = norm(i._cuadrillaNombre);
-      const meta = key && idxAsistenciaByNombre[key] ? idxAsistenciaByNombre[key] : {};
-
-      const _zona = i.zona || meta.zona || "Sin Zona";
-
-      const _gestor = personaDe(
-        i.gestor ||
-        i.gestorCuadrilla ||
-        i.gestorNombre ||
-        i.gestorCuadrillaNombre ||
-        meta.gestor ||
-        meta.gestorNombre ||
-        ""
-      );
-
-      const _coordinador = personaDe(
-        i.coordinador ||
-        i.coordinadorCuadrilla ||
-        i.coordinadorNombre ||
-        i.coordinadorCuadrillaNombre ||
-        meta.coordinador ||
-        meta.coordinadorNombre ||
-        ""
-      );
-
-      const _cuadrillaNombre = i._cuadrillaNombre || meta.nombre || "";
-
-      return { ...i, _zona, _gestor, _coordinador, _cuadrillaNombre };
+  // Meta por cuadrilla desde instalaciones (para completar región/tipo si falta en asistencia)
+  const instalacionesPeriodoEnriq = useMemo(() => {
+    // enriquecer cada instalación con campos unificados
+    return instalacionesPeriodoBase.map(i => {
+      const _zona = i.zona || "Sin Zona";
+      const _region = i.region || "";
+      const _tipoCuadrilla = i.tipoCuadrilla || "";
+      const _gestor = personaDe(i.gestor || i.gestorCuadrilla || i.gestorNombre || i.gestorCuadrillaNombre || "");
+      const _coordinador = personaDe(i.coordinador || i.coordinadorCuadrilla || i.coordinadorNombre || i.coordinadorCuadrillaNombre || "");
+      const _cuadrillaNombre = i._cuadrillaNombre || "";
+      return { ...i, _zona, _region, _tipoCuadrilla, _gestor, _coordinador, _cuadrillaNombre };
     });
-  }, [instalacionesHoyBase, idxAsistenciaByNombre, usuariosIdx]);
+  }, [instalacionesPeriodoBase, usuariosIdx]);
+
+  // índice meta por cuadrilla normalizada
+  const idxMetaCuadrilla = useMemo(() => {
+    const m = {};
+    for (const i of instalacionesPeriodoEnriq) {
+      const k = normCuad(i._cuadrillaNombre);
+      if (!k) continue;
+      if (!m[k]) {
+        m[k] = {
+          zona: i._zona,
+          region: i._region,
+          tipoCuadrilla: i._tipoCuadrilla,
+          gestor: i._gestor,
+          coordinador: i._coordinador,
+          nombre: i._cuadrillaNombre,
+        };
+      }
+    }
+    return m;
+  }, [instalacionesPeriodoEnriq]);
 
   /* =========================
-     Filtros (derivados de instalaciones)
+     Filtros (opciones desde instalaciones)
   ========================== */
   const opcionesZonas = useMemo(() => {
     const m = new Map();
-    for (const i of instalacionesHoyEnriquecidas) {
+    for (const i of instalacionesPeriodoEnriq) {
       const label = (i._zona || "Sin Zona").toString();
       const key = norm(label);
       if (key) m.set(key, label);
     }
     return Array.from(m.values()).sort((a, b) => a.localeCompare(b));
-  }, [instalacionesHoyEnriquecidas]);
+  }, [instalacionesPeriodoEnriq]);
+
+  const opcionesRegiones = useMemo(() => {
+    const m = new Map();
+    for (const i of instalacionesPeriodoEnriq) {
+      const label = (i._region || "").toString();
+      const key = norm(label);
+      if (key) m.set(key, label);
+    }
+    return Array.from(m.values()).sort((a, b) => a.localeCompare(b));
+  }, [instalacionesPeriodoEnriq]);
+
+  const opcionesTipoCuadrilla = useMemo(() => {
+    const m = new Map();
+    for (const i of instalacionesPeriodoEnriq) {
+      const label = (i._tipoCuadrilla || "").toString();
+      const key = norm(label);
+      if (key) m.set(key, label);
+    }
+    return Array.from(m.values()).sort((a, b) => a.localeCompare(b));
+  }, [instalacionesPeriodoEnriq]);
 
   const opcionesGestor = useMemo(() => {
     const m = new Map();
-    for (const i of instalacionesHoyEnriquecidas) {
+    for (const i of instalacionesPeriodoEnriq) {
       const label = (i._gestor || "").toString();
       const key = norm(label);
       if (key) m.set(key, label);
     }
     return Array.from(m.values()).sort((a, b) => a.localeCompare(b));
-  }, [instalacionesHoyEnriquecidas]);
+  }, [instalacionesPeriodoEnriq]);
 
   const opcionesCoordinador = useMemo(() => {
     const m = new Map();
-    for (const i of instalacionesHoyEnriquecidas) {
+    for (const i of instalacionesPeriodoEnriq) {
       const label = (i._coordinador || "").toString();
       const key = norm(label);
       if (key) m.set(key, label);
     }
     return Array.from(m.values()).sort((a, b) => a.localeCompare(b));
-  }, [instalacionesHoyEnriquecidas]);
+  }, [instalacionesPeriodoEnriq]);
 
   const opcionesCuadrilla = useMemo(() => {
     const m = new Map();
-    for (const i of instalacionesHoyEnriquecidas) {
+    for (const i of instalacionesPeriodoEnriq) {
       const label = (i._cuadrillaNombre || "").toString();
       const key = norm(label);
       if (key) m.set(key, label);
     }
     return Array.from(m.values()).sort((a, b) => a.localeCompare(b));
-  }, [instalacionesHoyEnriquecidas]);
+  }, [instalacionesPeriodoEnriq]);
 
-  // lista filtrada por lo que el usuario escribe
-  const opcionesCuadrillaFiltradas = useMemo(
-    () => opcionesCuadrilla.filter(q => norm(q).includes(norm(qCuadrilla))),
-    [opcionesCuadrilla, qCuadrilla]
-  );
-
+  // Filtro principal para instalaciones seleccionadas (para el resto de paneles)
   const pasaFiltroInst = (i) => {
     if (fZona && norm(i._zona || "Sin Zona") !== norm(fZona)) return false;
+    if (fRegion && norm(i._region || "") !== norm(fRegion)) return false;
+    if (fTipoCuadrilla && norm(i._tipoCuadrilla || "") !== norm(fTipoCuadrilla)) return false;
     if (fGestor && norm(i._gestor || "") !== norm(fGestor)) return false;
     if (fCoordinador && norm(i._coordinador || "") !== norm(fCoordinador)) return false;
-    if (fCuadrilla && norm(i._cuadrillaNombre || "") !== norm(fCuadrilla)) return false;
+    if (fCuadrilla && !norm(i._cuadrillaNombre || "").includes(norm(fCuadrilla))) return false;
     return true;
   };
 
-  const instalacionesHoy = useMemo(
-    () => instalacionesHoyEnriquecidas.filter(pasaFiltroInst),
-    [instalacionesHoyEnriquecidas, fZona, fGestor, fCoordinador, fCuadrilla]
+  const instalacionesSel = useMemo(
+    () => instalacionesPeriodoEnriq.filter(pasaFiltroInst),
+    [instalacionesPeriodoEnriq, fZona, fRegion, fTipoCuadrilla, fGestor, fCoordinador, fCuadrilla]
   );
 
   /* =========================
-     Asistencia (solo cuadrillas con técnicos y presentes en las instalaciones)
+     Asistencia (SOLO asistencia) — no depende de instalaciones
+     - Cuadrillas con técnicos por día
+     - Se excluyen "descanso"
+     - Se aplican los filtros usando datos de asistencia y meta de instalaciones
   ========================== */
-  const tecnicosHoy = useMemo(
-    () => asistenciaTecnicosAll.filter(t => toYMD(t.fecha) === fecha),
-    [asistenciaTecnicosAll, fecha]
-  );
-  const cuadrillasConTecnicosSet = useMemo(() => {
-    const s = new Set(
-      tecnicosHoy
-        .map(t => norm(t.cuadrillaNombre || t.cuadrilla || t.nombreCuadrilla))
-        .filter(Boolean)
-    );
-    return s;
-  }, [tecnicosHoy]);
 
-  const asistenciaFiltradaHoy = useMemo(() => {
-    const cuInst = new Set(
-      instalacionesHoy.map(i => norm(i._cuadrillaNombre)).filter(Boolean)
-    );
-    return asistenciaHoyBase
-      .filter(c => cuadrillasConTecnicosSet.has(norm(c.nombre)))
-      .filter(c => cuInst.has(norm(c.nombre)));
-  }, [asistenciaHoyBase, instalacionesHoy, cuadrillasConTecnicosSet]);
+  // índice de cuadrillas con técnicos por día (fechas del período)
+  const idxTecPorDia = useMemo(() => {
+    const m = {};
+    for (const t of asistenciaTecnicosAll) {
+      const y = toYMD(t.fecha);
+      if (!setFechas.has(y)) continue;
+      const k = normCuad(
+        t.cuadrillaNombre ||
+        t.cuadrilla ||
+        t.nombreCuadrilla ||
+        t.cuadrillaId              // <-- añadido
+      );
+      if (!k) continue;
+      if (!m[y]) m[y] = new Set();
+      m[y].add(k);
+    }
+    return m;
+  }, [asistenciaTecnicosAll, setFechas, fechasSel.join("|")]);
 
-  const asistidasHoy = useMemo(
-    () => asistenciaFiltradaHoy.filter(c => (c.estado || "").toLowerCase() === "asistencia"),
-    [asistenciaFiltradaHoy]
-  );
-  const totalRegistrosHoy = asistenciaFiltradaHoy.length;
-  const pctAsistenciaHoy = totalRegistrosHoy > 0 ? (asistidasHoy.length / totalRegistrosHoy) * 100 : 0;
+  // asistencia del período ya filtrada por los selects (usando meta si falta info)
+  const asistenciaPeriodoFiltrada = useMemo(() => {
+    const filas = asistenciaCuadrillasAll
+      .filter(c => setFechas.has(c.fecha))
+      .map(c => {
+        const key = normCuad(c.nombre || c.cuadrillaNombre || c.cuadrillaId || c.cuadrilla);
+        const meta = idxMetaCuadrilla[key] || {};
+        return {
+          ...c,
+          _key: key,
+          _nombre: c.nombre || meta.nombre || c.cuadrilla || "",
+          _zona: c.zona || meta.zona || "Sin Zona",
+          _region: c.region || meta.region || "",
+          _tipoCuadrilla: c.tipoCuadrilla || c.tipo || meta.tipoCuadrilla || "",
+          _gestor: personaDe(c.gestor || meta.gestor || ""),
+          _coordinador: personaDe(c.coordinador || meta.coordinador || ""),
+        };
+      })
+      .filter(c => {
+        if (fZona && norm(c._zona) !== norm(fZona)) return false;
+        if (fRegion && norm(c._region) !== norm(fRegion)) return false;
+        if (fTipoCuadrilla && norm(c._tipoCuadrilla) !== norm(fTipoCuadrilla)) return false;
+        if (fGestor && norm(c._gestor) !== norm(fGestor)) return false;
+        if (fCoordinador && norm(c._coordinador) !== norm(fCoordinador)) return false;
+        if (fCuadrilla && !norm(c._nombre).includes(norm(fCuadrilla))) return false;
+        return true;
+      });
+    return filas;
+  }, [asistenciaCuadrillasAll, setFechas, idxMetaCuadrilla, fZona, fRegion, fTipoCuadrilla, fGestor, fCoordinador, fCuadrilla, usuariosIdx]);
+
+  // Resumen de asistencia (con técnicos y sin descanso)
+  const resumenAsistencia = useMemo(() => {
+    let registrosValidos = 0;
+    let asistidas = 0;
+    let descansos = 0;
+
+    for (const ymd of fechasSel) {
+      const cuTec = idxTecPorDia[ymd] || new Set();
+
+      const registrosDia = asistenciaPeriodoFiltrada.filter(
+        c => c.fecha === ymd && cuTec.has(c._key)
+      );
+
+      descansos += registrosDia.filter(c => (c.estado || "").toLowerCase() === "descanso").length;
+
+      const validosDia = registrosDia.filter(c =>
+        ["asistencia", "falta"].includes((c.estado || "").toLowerCase())
+      );
+      registrosValidos += validosDia.length;
+      asistidas += validosDia.filter(c => (c.estado || "").toLowerCase() === "asistencia").length;
+    }
+
+    return { registrosValidos, asistidas, descansos };
+  }, [fechasSel, idxTecPorDia, asistenciaPeriodoFiltrada]);
+
+  const totalRegistrosSel = resumenAsistencia.registrosValidos;
+  const asistidasSel = resumenAsistencia.asistidas;
+  const descansosSel = resumenAsistencia.descansos;
+  const pctAsistenciaSel = totalRegistrosSel > 0 ? (asistidasSel / totalRegistrosSel) * 100 : 0;
 
   /* =========================
      Instalaciones válidas (sin garantía) y KPIs
   ========================== */
-  const instHoyValidas = useMemo(
-    () => instalacionesHoy.filter(i => (i.tipoServicio || "").toLowerCase() !== "garantia"),
-    [instalacionesHoy]
+  const instSelValidas = useMemo(
+    () => instalacionesSel.filter(i => (i.tipoServicio || "").toLowerCase() !== "garantia"),
+    [instalacionesSel]
   );
 
-  const instalacionesAyer = useMemo(() => {
-    const base = instalacionesAll
-      .filter(i => i._fechaYMD === fechaAyer)
-      .map(i => {
-        const key  = norm(i._cuadrillaNombre || i.cuadrillaNombre || i.cuadrilla);
-        const meta = key && idxAsistenciaByNombre[key] ? idxAsistenciaByNombre[key] : {};
+  // período anterior (misma lógica de asistencia sin instalaciones)
+  const instalacionesPrevBase = useMemo(
+    () => instalacionesAll.filter(i => setFechasPrev.has(i._fechaYMD)),
+    [instalacionesAll, setFechasPrev, fechasPrev.join("|")]
+  );
 
-        const _zona = i.zona || meta.zona || "Sin Zona";
+  const instalacionesPrevEnriq = useMemo(() => {
+    return instalacionesPrevBase.map(i => {
+      const _zona = i.zona || "Sin Zona";
+      const _region = i.region || "";
+      const _tipoCuadrilla = i.tipoCuadrilla || "";
+      const _gestor = personaDe(i.gestor || i.gestorCuadrilla || i.gestorNombre || i.gestorCuadrillaNombre || "");
+      const _coordinador = personaDe(i.coordinador || i.coordinadorCuadrilla || i.coordinadorNombre || i.coordinadorCuadrillaNombre || "");
+      const _cuadrillaNombre = i._cuadrillaNombre || "";
+      return { ...i, _zona, _region, _tipoCuadrilla, _gestor, _coordinador, _cuadrillaNombre };
+    }).filter(pasaFiltroInst);
+  }, [instalacionesPrevBase, usuariosIdx, fZona, fRegion, fTipoCuadrilla, fGestor, fCoordinador, fCuadrilla]);
 
-        const _gestor = personaDe(
-          i.gestor ||
-          i.gestorCuadrilla ||
-          i.gestorNombre ||
-          i.gestorCuadrillaNombre ||
-          meta.gestor ||
-          meta.gestorNombre ||
-          ""
-        );
+  const instPrevValidas = useMemo(
+    () => instalacionesPrevEnriq.filter(i => (i.tipoServicio || "").toLowerCase() !== "garantia"),
+    [instalacionesPrevEnriq]
+  );
 
-        const _coordinador = personaDe(
-          i.coordinador ||
-          i.coordinadorCuadrilla ||
-          i.coordinadorNombre ||
-          i.coordinadorCuadrillaNombre ||
-          meta.coordinador ||
-          meta.coordinadorNombre ||
-          ""
-        );
+  // meta anterior por cuadrilla
+  const idxMetaPrev = useMemo(() => {
+    const m = {};
+    for (const i of instalacionesPrevEnriq) {
+      const k = normCuad(i._cuadrillaNombre);
+      if (!k) continue;
+      if (!m[k]) {
+        m[k] = {
+          zona: i._zona, region: i._region, tipoCuadrilla: i._tipoCuadrilla,
+          gestor: i._gestor, coordinador: i._coordinador, nombre: i._cuadrillaNombre,
+        };
+      }
+    }
+    return m;
+  }, [instalacionesPrevEnriq]);
 
-        const _cuadrillaNombre = i._cuadrillaNombre || i.cuadrillaNombre || meta.nombre || "";
-
-        return { ...i, _zona, _gestor, _coordinador, _cuadrillaNombre };
+  // asistencia anterior con misma lógica
+  const asistenciaPrevFiltrada = useMemo(() => {
+    const filas = asistenciaCuadrillasAll
+      .filter(c => setFechasPrev.has(c.fecha))
+      .map(c => {
+        const key = normCuad(c.nombre || c.cuadrillaNombre || c.cuadrillaId || c.cuadrilla);
+        const meta = idxMetaPrev[key] || {};
+        return {
+          ...c,
+          _key: key,
+          _nombre: c.nombre || meta.nombre || c.cuadrilla || "",
+          _zona: c.zona || meta.zona || "Sin Zona",
+          _region: c.region || meta.region || "",
+          _tipoCuadrilla: c.tipoCuadrilla || c.tipo || meta.tipoCuadrilla || "",
+          _gestor: personaDe(c.gestor || meta.gestor || ""),
+          _coordinador: personaDe(c.coordinador || meta.coordinador || ""),
+        };
+      })
+      .filter(c => {
+        if (fZona && norm(c._zona) !== norm(fZona)) return false;
+        if (fRegion && norm(c._region) !== norm(fRegion)) return false;
+        if (fTipoCuadrilla && norm(c._tipoCuadrilla) !== norm(fTipoCuadrilla)) return false;
+        if (fGestor && norm(c._gestor) !== norm(fGestor)) return false;
+        if (fCoordinador && norm(c._coordinador) !== norm(fCoordinador)) return false;
+        if (fCuadrilla && !norm(c._nombre).includes(norm(fCuadrilla))) return false;
+        return true;
       });
+    return filas;
+  }, [asistenciaCuadrillasAll, setFechasPrev, idxMetaPrev, fZona, fRegion, fTipoCuadrilla, fGestor, fCoordinador, fCuadrilla, usuariosIdx]);
 
-    return base.filter(pasaFiltroInst);
-  }, [instalacionesAll, fechaAyer, idxAsistenciaByNombre, fZona, fGestor, fCoordinador, fCuadrilla, usuariosIdx]);
+  // índice técnicos anterior
+  const idxTecPrevPorDia = useMemo(() => {
+    const m = {};
+    for (const t of asistenciaTecnicosAll) {
+      const y = toYMD(t.fecha);
+      if (!setFechasPrev.has(y)) continue;
+      const k = normCuad(
+        t.cuadrillaNombre ||
+        t.cuadrilla ||
+        t.nombreCuadrilla ||
+        t.cuadrillaId              // <-- añadido
+      );
+      if (!k) continue;
+      if (!m[y]) m[y] = new Set();
+      m[y].add(k);
+    }
+    return m;
+  }, [asistenciaTecnicosAll, setFechasPrev, fechasPrev.join("|")]);
 
-  const instAyerValidas = useMemo(
-    () => instalacionesAyer.filter(i => (i.tipoServicio || "").toLowerCase() !== "garantia"),
-    [instalacionesAyer]
+  const resumenAsistenciaPrev = useMemo(() => {
+    let registrosValidos = 0, asistidas = 0;
+    for (const ymd of fechasPrev) {
+      const cuTec = idxTecPrevPorDia[ymd] || new Set();
+      const registrosDia = asistenciaPrevFiltrada.filter(
+        c => c.fecha === ymd && cuTec.has(c._key)
+      );
+      const validosDia = registrosDia.filter(c =>
+        ["asistencia", "falta"].includes((c.estado || "").toLowerCase())
+      );
+      registrosValidos += validosDia.length;
+      asistidas += validosDia.filter(c => (c.estado || "").toLowerCase() === "asistencia").length;
+    }
+    return { registrosValidos, asistidas };
+  }, [fechasPrev, idxTecPrevPorDia, asistenciaPrevFiltrada]);
+
+  const pctAsistenciaPrev = resumenAsistenciaPrev.registrosValidos > 0
+    ? (resumenAsistenciaPrev.asistidas / resumenAsistenciaPrev.registrosValidos) * 100
+    : 0;
+
+  /* ==== Finalizadas / Efectividad / Prod ==== */
+  const finalizadasSel = useMemo(
+    () => instSelValidas.filter(i => (i.estado || "").toLowerCase() === "finalizada"),
+    [instSelValidas]
   );
+  const countFinalizadasSel = finalizadasSel.length;
 
-  const finalizadasHoy = useMemo(
-    () => instHoyValidas.filter(i => (i.estado || "").toLowerCase() === "finalizada"),
-    [instHoyValidas]
+  const finalizadasPrev = useMemo(
+    () => instPrevValidas.filter(i => (i.estado || "").toLowerCase() === "finalizada"),
+    [instPrevValidas]
   );
-  const countFinalizadasHoy = finalizadasHoy.length;
+  const countFinalizadasPrev = finalizadasPrev.length;
 
-  const finalizadasAyer = useMemo(
-    () => instAyerValidas.filter(i => (i.estado || "").toLowerCase() === "finalizada"),
-    [instAyerValidas]
-  );
-  const countFinalizadasAyer = finalizadasAyer.length;
+  const efectividadSel = instSelValidas.length > 0 ? (countFinalizadasSel / instSelValidas.length) * 100 : 0;
+  const efectividadPrev = instPrevValidas.length > 0 ? (countFinalizadasPrev / instPrevValidas.length) * 100 : 0;
+  const deltaEfectividad = efectividadSel - efectividadPrev;
 
-  const efectividadHoy = instHoyValidas.length > 0 ? (countFinalizadasHoy / instHoyValidas.length) * 100 : 0;
-  const efectividadAyer = instAyerValidas.length > 0 ? (countFinalizadasAyer / instAyerValidas.length) * 100 : 0;
-  const deltaEfectividad = efectividadHoy - efectividadAyer;
-
-  const prodHoy = asistidasHoy.length > 0 ? (countFinalizadasHoy / asistidasHoy.length) : 0;
-
-  const asistidasAyer = useMemo(() => {
-    const tecnicosAyer = asistenciaTecnicosAll.filter(t => toYMD(t.fecha) === fechaAyer);
-    const setCuTecAyer = new Set(
-      tecnicosAyer.map(t => norm(t.cuadrillaNombre || t.cuadrilla || t.nombreCuadrilla)).filter(Boolean)
-    );
-    const cuInstAyer = new Set(
-      instalacionesAyer.map(i => norm(i._cuadrillaNombre)).filter(Boolean)
-    );
-    const asisAyer = asistenciaCuadrillasAll
-      .filter(c => c.fecha === fechaAyer)
-      .filter(c => setCuTecAyer.has(norm(c.nombre)))
-      .filter(c => cuInstAyer.has(norm(c.nombre)));
-    return asisAyer.filter(c => (c.estado || "").toLowerCase() === "asistencia");
-  }, [asistenciaCuadrillasAll, asistenciaTecnicosAll, instalacionesAyer, fechaAyer]);
-  const prodAyer = asistidasAyer.length > 0 ? (countFinalizadasAyer / asistidasAyer.length) : 0;
-  const deltaProd = prodHoy - prodAyer;
+  // productividad: finalizadas válidas / cuadrillas asistidas (sin descanso)
+  const prodSel = asistidasSel > 0 ? (countFinalizadasSel / asistidasSel) : 0;
+  const prodPrev = resumenAsistenciaPrev.asistidas > 0 ? (countFinalizadasPrev / resumenAsistenciaPrev.asistidas) : 0;
+  const deltaProd = prodSel - prodPrev;
 
   /* =========================
      Tiempo de ciclo promedio (solo finalizadas válidas)
   ========================== */
-  function parseFechaHora(x) {
+  function parseFechaHora(x, ymdDefault) {
     if (!x) return null;
     if (typeof x === "string") {
       const d = dayjs(x);
       if (d.isValid()) return d;
-      const hhmm = dayjs(`${fecha} ${x}`);
+      const hhmm = dayjs(`${ymdDefault} ${x}`);
       return hhmm.isValid() ? hhmm : null;
     }
     if (x.toDate) return dayjs(x.toDate());
@@ -497,15 +694,15 @@ const completarCuadrilla = () => {
   }
   const tiemposValidos = useMemo(() => {
     const mins = [];
-    for (const i of finalizadasHoy) {
-      const ini = parseFechaHora(i.horaInicio || i.inicio || i.horaInicioTrabajo);
-      const fin = parseFechaHora(i.horaFin || i.fin || i.horaFinTrabajo);
+    for (const i of finalizadasSel) {
+      const ini = parseFechaHora(i.horaInicio || i.inicio || i.horaInicioTrabajo, i._fechaYMD);
+      const fin = parseFechaHora(i.horaFin || i.fin || i.horaFinTrabajo, i._fechaYMD);
       if (ini && fin && fin.isAfter(ini)) mins.push(fin.diff(ini, "minute"));
     }
     if (mins.length === 0) return { promedioMin: null, count: 0 };
     const avg = mins.reduce((s, m) => s + m, 0) / mins.length;
     return { promedioMin: avg, count: mins.length };
-  }, [finalizadasHoy, fecha]);
+  }, [finalizadasSel]);
 
   const tiempoCicloFmt = useMemo(() => {
     if (!Number.isFinite(tiemposValidos.promedioMin)) return "—";
@@ -516,11 +713,11 @@ const completarCuadrilla = () => {
   }, [tiemposValidos]);
 
   /* =========================
-     Top Zonas y Distribución por zona
+     Top Zonas (por _zona) y Distribución completa (por _zona)
   ========================== */
   const topZonasData = useMemo(() => {
     const acc = {};
-    for (const i of finalizadasHoy) {
+    for (const i of finalizadasSel) {
       const z = i._zona || "Sin Zona";
       acc[z] = (acc[z] || 0) + 1;
     }
@@ -528,23 +725,23 @@ const completarCuadrilla = () => {
       .map(([name, value]) => ({ name, value }))
       .sort((a, b) => b.value - a.value)
       .slice(0, 8);
-  }, [finalizadasHoy]);
+  }, [finalizadasSel]);
 
   const distZonasCompleto = useMemo(() => {
     const acc = {};
-    for (const i of instHoyValidas) {
+    for (const i of instSelValidas) {
       const z = i._zona || "Sin Zona";
       acc[z] = (acc[z] || 0) + 1;
     }
     return Object.entries(acc).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
-  }, [instHoyValidas]);
+  }, [instSelValidas]);
 
   /* =========================
-     Mapa rápido
+     Mapa rápido (todas las instalaciones del filtro)
   ========================== */
   const puntosMapa = useMemo(() => {
     const pts = [];
-    for (const i of instalacionesHoy) {
+    for (const i of instalacionesSel) {
       const lat = Number(i.lat ?? i.latitud ?? i.latitude ?? i?.coordenadas?.lat);
       const lng = Number(i.lng ?? i.longitud ?? i.longitude ?? i.lon ?? i?.coordenadas?.lng);
       if (Number.isFinite(lat) && Number.isFinite(lng)) {
@@ -559,7 +756,7 @@ const completarCuadrilla = () => {
       }
     }
     return pts;
-  }, [instalacionesHoy]);
+  }, [instalacionesSel]);
 
   const centerMapa = useMemo(() => {
     if (puntosMapa.length === 0) return [-12.0464, -77.0428];
@@ -569,11 +766,11 @@ const completarCuadrilla = () => {
   }, [puntosMapa]);
 
   /* =========================
-     Top Cuadrillas
+     Top Cuadrillas — Finalizadas válidas (por cuadrillaNombre)
   ========================== */
   const topCuadrillas = useMemo(() => {
     const acc = {};
-    for (const i of finalizadasHoy) {
+    for (const i of finalizadasSel) {
       const c = i._cuadrillaNombre || "Sin Cuadrilla";
       acc[c] = (acc[c] || 0) + 1;
     }
@@ -581,43 +778,27 @@ const completarCuadrilla = () => {
       .map(([cuadrilla, finalizadas]) => ({ cuadrilla, finalizadas }))
       .sort((a, b) => b.finalizadas - a.finalizadas)
       .slice(0, 8);
-  }, [finalizadasHoy]);
+  }, [finalizadasSel]);
 
   /* =========================
-     Tendencia 7 días
+     Tendencia 7 días (anclada al último día del período seleccionado)
   ========================== */
   const tendencia7 = useMemo(() => {
     const arr = [];
     for (let d = 6; d >= 0; d--) {
-      const ymd = dayjs(fecha).subtract(d, "day").format("YYYY-MM-DD");
+      const ymd = dayjs(fechaRef).subtract(d, "day").format("YYYY-MM-DD");
 
       const instD = instalacionesAll
         .filter(i => i._fechaYMD === ymd)
         .map(i => {
-          const key  = norm(i._cuadrillaNombre || i.cuadrillaNombre || i.cuadrilla);
-          const meta = key && idxAsistenciaByNombre[key] ? idxAsistenciaByNombre[key] : {};
           return {
             ...i,
-            _zona: i.zona || meta.zona || "Sin Zona",
-            _gestor: personaDe(
-              i.gestor ||
-              i.gestorCuadrilla ||
-              i.gestorNombre ||
-              i.gestorCuadrillaNombre ||
-              meta.gestor ||
-              meta.gestorNombre ||
-              ""
-            ),
-            _coordinador: personaDe(
-              i.coordinador ||
-              i.coordinadorCuadrilla ||
-              i.coordinadorNombre ||
-              i.coordinadorCuadrillaNombre ||
-              meta.coordinador ||
-              meta.coordinadorNombre ||
-              ""
-            ),
-            _cuadrillaNombre: i._cuadrillaNombre || i.cuadrillaNombre || meta.nombre || "",
+            _zona: i.zona || "Sin Zona",
+            _region: i.region || "",
+            _tipoCuadrilla: i.tipoCuadrilla || "",
+            _gestor: personaDe(i.gestor || i.gestorCuadrilla || i.gestorNombre || i.gestorCuadrillaNombre || ""),
+            _coordinador: personaDe(i.coordinador || i.coordinadorCuadrilla || i.coordinadorNombre || i.coordinadorCuadrillaNombre || ""),
+            _cuadrillaNombre: i._cuadrillaNombre || "",
           };
         })
         .filter(pasaFiltroInst);
@@ -626,37 +807,48 @@ const completarCuadrilla = () => {
       const finD = instDValidas.filter(i => (i.estado || "").toLowerCase() === "finalizada").length;
       const efectD = instDValidas.length > 0 ? (finD / instDValidas.length) * 100 : 0;
 
-      const cuInstSet = new Set(instD.map(i => norm(i._cuadrillaNombre)).filter(Boolean));
-      const tecD = asistenciaTecnicosAll.filter(t => toYMD(t.fecha) === ymd);
-      const cuConTec = new Set(tecD.map(t => norm(t.cuadrillaNombre || t.cuadrilla || t.nombreCuadrilla)).filter(Boolean));
-      const asisD = asistenciaCuadrillasAll
+      // asistencia del día y % asistencia (sin descansos) con técnicos
+      const tecSet = new Set(
+        asistenciaTecnicosAll
+          .filter(t => toYMD(t.fecha) === ymd)
+          .map(t => normCuad(t.cuadrillaNombre || t.cuadrilla || t.nombreCuadrilla || t.cuadrillaId)) // <-- añadido cuadrillaId
+          .filter(Boolean)
+      );
+
+      const asisDia = asistenciaCuadrillasAll
         .filter(c => c.fecha === ymd)
-        .filter(c => cuConTec.has(norm(c.nombre)))
-        .filter(c => cuInstSet.has(norm(c.nombre)));
-      const asisOK = asisD.filter(c => (c.estado || "").toLowerCase() === "asistencia");
-      const pctAsisD = asisD.length > 0 ? (asisOK.length / asisD.length) * 100 : 0;
+        .map(c => ({ ...c, _key: normCuad(c.nombre || c.cuadrillaNombre || c.cuadrillaId || c.cuadrilla) }))
+        .filter(c => tecSet.has(c._key));
+
+      const validos = asisDia.filter(c => ["asistencia", "falta"].includes((c.estado || "").toLowerCase()));
+      const ok = validos.filter(c => (c.estado || "").toLowerCase() === "asistencia");
+      const pctAsisD = validos.length > 0 ? (ok.length / validos.length) * 100 : 0;
 
       arr.push({ fecha: ymd.slice(5), pctAsistencia: Number(pctAsisD.toFixed(1)), efectividad: Number(efectD.toFixed(1)) });
     }
     return arr;
-  }, [fecha, instalacionesAll, asistenciaCuadrillasAll, asistenciaTecnicosAll, fZona, fGestor, fCoordinador, fCuadrilla, idxAsistenciaByNombre, usuariosIdx]);
+  }, [fechaRef, instalacionesAll, asistenciaCuadrillasAll, asistenciaTecnicosAll, fZona, fRegion, fTipoCuadrilla, fGestor, fCoordinador, fCuadrilla, usuariosIdx]);
 
   /* =========================
      Exportar Excel
   ========================== */
   const exportarXLSX = () => {
     const hoja1 = [
-      ["Fecha", fecha],
+      ["Período", periodo.etiqueta],
+      ["Tipo", rangoTipo],
       ["Zona", fZona || "Todas"],
+      ["Región", fRegion || "Todas"],
+      ["Tipo Cuadrilla", fTipoCuadrilla || "Todas"],
       ["Gestor", fGestor || "Todos"],
       ["Coordinador", fCoordinador || "Todos"],
-      ["Cuadrilla (cuadrillaNombre)", fCuadrilla || "Todas"],
+      ["Cuadrilla (contiene)", fCuadrilla || "—"],
       [],
-      ["KPI", "Valor", "Ayer", "Δ"],
-      ["Finalizadas (sin garantía)", countFinalizadasHoy, countFinalizadasAyer, countFinalizadasHoy - countFinalizadasAyer],
-      ["Efectividad (sin garantía)", `${efectividadHoy.toFixed(1)}%`, `${efectividadAyer.toFixed(1)}%`, (efectividadHoy-efectividadAyer).toFixed(1)],
-      ["% Asistencia (con técnicos)", `${pctAsistenciaHoy.toFixed(1)}%`, "", ""],
-      ["Prod. (Finalizadas/Cuadrilla)", prodHoy.toFixed(2), prodAyer.toFixed(2), (prodHoy-prodAyer).toFixed(2)],
+      ["KPI", "Valor", "Periodo anterior", "Δ"],
+      ["Finalizadas (sin garantía)", countFinalizadasSel, countFinalizadasPrev, countFinalizadasSel - countFinalizadasPrev],
+      ["Efectividad (sin garantía)", `${efectividadSel.toFixed(1)}%`, `${efectividadPrev.toFixed(1)}%`, (efectividadSel-efectividadPrev).toFixed(1)],
+      ["% Asistencia (sin descansos)", `${pctAsistenciaSel.toFixed(1)}%`, `${pctAsistenciaPrev.toFixed(1)}%`, (pctAsistenciaSel - pctAsistenciaPrev).toFixed(1)],
+      ["Prod. (Finalizadas/Cuadrilla asistida)", prodSel.toFixed(2), prodPrev.toFixed(2), (prodSel - prodPrev).toFixed(2)],
+      ["Descansos (programados)", descansosSel, "", ""],
       ["Tiempo de ciclo promedio", tiempoCicloFmt, "", ""],
     ];
 
@@ -674,25 +866,34 @@ const completarCuadrilla = () => {
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(hoja2), "TopZonas");
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(hoja3), "Distribución");
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(hoja4), "TopCuadrillas");
-    XLSX.writeFile(wb, `dashboard_${fecha}.xlsx`);
+    XLSX.writeFile(wb, `dashboard_${periodo.start.format("YYYYMMDD")}_${periodo.end.format("YYYYMMDD")}.xlsx`);
   };
 
   /* =========================
      UI helpers
   ========================== */
-  const progresoInst = Math.min(100, (countFinalizadasHoy / (metaInstalaciones || 1)) * 100);
-  const progresoAsis = Math.min(100, (pctAsistenciaHoy / (metaPctAsistencia || 1)) * 100);
+  const progresoInst = Math.min(100, (countFinalizadasSel / (metaInstalaciones || 1)) * 100);
+  const progresoAsis = Math.min(100, (pctAsistenciaSel / (metaPctAsistencia || 1)) * 100);
   const limpiarFiltros = () => {
-  setFZona(""); setFGestor(""); setFCoordinador(""); setFCuadrilla(""); setQCuadrilla("");
-};
+    setFZona("");
+    setFRegion("");
+    setFTipoCuadrilla("");
+    setFGestor("");
+    setFCoordinador("");
+    setFCuadrilla("");
+  };
 
+  const opcionesCuadrillaFiltradas = useMemo(
+    () => opcionesCuadrilla.filter(q => norm(q).includes(norm(fCuadrilla))),
+    [opcionesCuadrilla, fCuadrilla]
+  );
 
   return (
     <div className="min-h-screen space-y-8 p-6 dark:bg-slate-900 dark:text-slate-200">
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-3">
-          <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Dashboard — {fecha}</h1>
+          <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Dashboard — {periodo.etiqueta}</h1>
           {cargando && (
             <span className="inline-flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
               <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
@@ -705,26 +906,75 @@ const completarCuadrilla = () => {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <button
-            onClick={() => setFecha(dayjs().subtract(1, "day").format("YYYY-MM-DD"))}
-            className="rounded-lg border border-slate-300 px-3 py-2 text-sm hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800"
-            title="Ir a ayer"
+          {/* Tipo de período */}
+          <select
+            value={rangoTipo}
+            onChange={(e) => setRangoTipo(e.target.value)}
+            className="rounded-lg border border-slate-300 bg-white p-2 text-sm dark:border-slate-700 dark:bg-slate-800"
+            title="Tipo de período"
           >
-            ↩︎ Ayer
-          </button>
-          <input
-            type="date"
-            value={fecha}
-            onChange={(e) => setFecha(e.target.value)}
-            className="rounded-lg border border-slate-300 bg-white p-2 text-sm dark:border-slate-700 dark:bg-slate-800 dark:[color-scheme:dark]"
-          />
-          <button
-            onClick={() => setFecha(dayjs().format("YYYY-MM-DD"))}
-            className="rounded-lg border border-slate-300 px-3 py-2 text-sm hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800"
-            title="Ir a hoy"
-          >
-            Hoy
-          </button>
+            <option value="dia">Día</option>
+            <option value="semana">Semana</option>
+            <option value="semanas">Semanas</option>
+            <option value="mes">Mes</option>
+          </select>
+
+          {/* Inputs según tipo */}
+          {rangoTipo === "dia" && (
+            <>
+              <input
+                type="date"
+                value={fechaDia}
+                onChange={(e) => setFechaDia(e.target.value)}
+                className="rounded-lg border border-slate-300 bg-white p-2 text-sm dark:border-slate-700 dark:bg-slate-800 dark:[color-scheme:dark]"
+              />
+              <button
+                onClick={() => setFechaDia(hoyYMD)}
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800"
+                title="Ir a hoy"
+              >
+                Hoy
+              </button>
+            </>
+          )}
+
+          {rangoTipo === "semana" && (
+            <input
+              type="week"
+              value={semana}
+              onChange={(e) => setSemana(e.target.value)}
+              className="rounded-lg border border-slate-300 bg-white p-2 text-sm dark:border-slate-700 dark:bg-slate-800"
+            />
+          )}
+
+          {rangoTipo === "semanas" && (
+            <>
+              <input
+                type="week"
+                value={semanaIni}
+                onChange={(e) => setSemanaIni(e.target.value)}
+                className="rounded-lg border border-slate-300 bg-white p-2 text-sm dark:border-slate-700 dark:bg-slate-800"
+                title="Semana inicial"
+              />
+              <span className="text-sm text-slate-500">→</span>
+              <input
+                type="week"
+                value={semanaFin}
+                onChange={(e) => setSemanaFin(e.target.value)}
+                className="rounded-lg border border-slate-300 bg-white p-2 text-sm dark:border-slate-700 dark:bg-slate-800"
+                title="Semana final"
+              />
+            </>
+          )}
+
+          {rangoTipo === "mes" && (
+            <input
+              type="month"
+              value={mesVal}
+              onChange={(e) => setMesVal(e.target.value)}
+              className="rounded-lg border border-slate-300 bg-white p-2 text-sm dark:border-slate-700 dark:bg-slate-800"
+            />
+          )}
 
           <div className="mx-2 h-6 w-px bg-slate-300 dark:bg-slate-700" />
 
@@ -754,12 +1004,26 @@ const completarCuadrilla = () => {
           </button>
         }
       >
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-6">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-8">
           <div>
             <label className="mb-1 block text-xs text-slate-500 dark:text-slate-400">Zona / Distrito</label>
             <select className="w-full rounded-lg border border-slate-300 bg-white p-2 text-sm dark:border-slate-700 dark:bg-slate-800" value={fZona} onChange={(e) => setFZona(e.target.value)}>
               <option value="">Todas</option>
               {opcionesZonas.map(z => <option key={z} value={z}>{z}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="mb-1 block text-xs text-slate-500 dark:text-slate-400">Región</label>
+            <select className="w-full rounded-lg border border-slate-300 bg-white p-2 text-sm dark:border-slate-700 dark:bg-slate-800" value={fRegion} onChange={(e) => setFRegion(e.target.value)}>
+              <option value="">Todas</option>
+              {opcionesRegiones.map(r => <option key={r} value={r}>{r}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="mb-1 block text-xs text-slate-500 dark:text-slate-400">Tipo Cuadrilla</label>
+            <select className="w-full rounded-lg border border-slate-300 bg-white p-2 text-sm dark:border-slate-700 dark:bg-slate-800" value={fTipoCuadrilla} onChange={(e) => setFTipoCuadrilla(e.target.value)}>
+              <option value="">Todas</option>
+              {opcionesTipoCuadrilla.map(t => <option key={t} value={t}>{t}</option>)}
             </select>
           </div>
           <div>
@@ -777,37 +1041,32 @@ const completarCuadrilla = () => {
             </select>
           </div>
 
-          {/* Cuadrilla + buscador */}
+          {/* Búsqueda por cuadrilla */}
           <div className="md:col-span-2">
-  <label className="mb-1 block text-xs text-slate-500 dark:text-slate-400">
-    Cuadrilla (por <b>cuadrillaNombre</b>)
-  </label>
+            <label className="mb-1 block text-xs text-slate-500 dark:text-slate-400">
+              Cuadrilla (buscar por <b>cuadrillaNombre</b>)
+            </label>
+            <input
+              list="d-cuadrillas"
+              className="w-full rounded-lg border border-slate-300 bg-white p-2 text-sm dark:border-slate-700 dark:bg-slate-800"
+              placeholder="Escribe para filtrar…"
+              value={fCuadrilla}
+              onChange={(e) => setFCuadrilla(e.target.value)}
+            />
+            <datalist id="d-cuadrillas">
+              {opcionesCuadrillaFiltradas.slice(0, 30).map(q => (
+                <option key={q} value={q} />
+              ))}
+            </datalist>
+          </div>
 
-  <input
-    list="lista-cuadrillas"
-    value={qCuadrilla}
-    onChange={(e) => { setQCuadrilla(e.target.value); setFCuadrilla(e.target.value); }}
-    onKeyDown={(e) => { if (e.key === "Enter") completarCuadrilla(); }}
-    onBlur={completarCuadrilla}
-    placeholder="Escribe una cuadrilla…"
-    className="w-full rounded-lg border border-slate-300 bg-white p-2 text-sm dark:border-slate-700 dark:bg-slate-800"
-  />
-
-  <datalist id="lista-cuadrillas">
-    {opcionesCuadrilla.map(o => <option key={o} value={o} />)}
-  </datalist>
-</div>
-
-
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <label className="mb-1 block text-xs text-slate-500 dark:text-slate-400">Meta Finalizadas (sin garantía)</label>
-              <input type="number" min={0} className="w-full rounded-lg border border-slate-300 bg-white p-2 text-sm dark:border-slate-700 dark:bg-slate-800" value={metaInstalaciones} onChange={(e) => setMetaInstalaciones(Number(e.target.value))} />
-            </div>
-            <div>
-              <label className="mb-1 block text-xs text-slate-500 dark:text-slate-400">Meta % Asistencia</label>
-              <input type="number" min={0} max={100} className="w-full rounded-lg border border-slate-300 bg-white p-2 text-sm dark:border-slate-700 dark:bg-slate-800" value={metaPctAsistencia} onChange={(e) => setMetaPctAsistencia(Number(e.target.value))} />
-            </div>
+          <div>
+            <label className="mb-1 block text-xs text-slate-500 dark:text-slate-400">Meta Finalizadas (sin garantía)</label>
+            <input type="number" min={0} className="w-full rounded-lg border border-slate-300 bg-white p-2 text-sm dark:border-slate-700 dark:bg-slate-800" value={metaInstalaciones} onChange={(e) => setMetaInstalaciones(Number(e.target.value))} />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs text-slate-500 dark:text-slate-400">Meta % Asistencia</label>
+            <input type="number" min={0} max={100} className="w-full rounded-lg border border-slate-300 bg-white p-2 text-sm dark:border-slate-700 dark:bg-slate-800" value={metaPctAsistencia} onChange={(e) => setMetaPctAsistencia(Number(e.target.value))} />
           </div>
         </div>
 
@@ -816,7 +1075,7 @@ const completarCuadrilla = () => {
           <div>
             <div className="flex items-end justify-between">
               <p className="text-sm font-medium">Cumplimiento Instalaciones Finalizadas</p>
-              <p className="text-xs text-slate-500">{countFinalizadasHoy}/{metaInstalaciones} ({progresoInst.toFixed(0)}%)</p>
+              <p className="text-xs text-slate-500">{countFinalizadasSel}/{metaInstalaciones} ({progresoInst.toFixed(0)}%)</p>
             </div>
             <div className="mt-1 h-3 w-full rounded-full bg-slate-200 dark:bg-slate-700">
               <div className="h-3 rounded-full bg-sky-500 dark:bg-sky-400" style={{ width: `${progresoInst}%` }} />
@@ -825,7 +1084,7 @@ const completarCuadrilla = () => {
           <div>
             <div className="flex items-end justify-between">
               <p className="text-sm font-medium">Cumplimiento % Asistencia</p>
-              <p className="text-xs text-slate-500">{pctAsistenciaHoy.toFixed(1)}% / {metaPctAsistencia}% ({progresoAsis.toFixed(0)}%)</p>
+              <p className="text-xs text-slate-500">{pctAsistenciaSel.toFixed(1)}% / {metaPctAsistencia}% ({progresoAsis.toFixed(0)}%)</p>
             </div>
             <div className="mt-1 h-3 w-full rounded-full bg-slate-200 dark:bg-slate-700">
               <div className="h-3 rounded-full bg-emerald-500 dark:bg-emerald-400" style={{ width: `${progresoAsis}%` }} />
@@ -835,30 +1094,36 @@ const completarCuadrilla = () => {
       </Card>
 
       {/* KPIs */}
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-6">
         <Kpi
-          label="% Asistencia (cuadrillas con técnicos)"
-          value={`${pctAsistenciaHoy.toFixed(1)}%`}
-          delta={NaN}
-          hint={`${asistidasHoy.length}/${totalRegistrosHoy || 0} cuadrillas en campo`}
+          label="% Asistencia (cuadrillas con técnicos, sin descansos)"
+          value={`${pctAsistenciaSel.toFixed(1)}%`}
+          delta={pctAsistenciaSel - pctAsistenciaPrev}
+          hint={`${asistidasSel}/${totalRegistrosSel || 0} cuadrillas en campo — ${descansosSel} descanso(s)`}
         />
         <Kpi
           label="Efectividad (sin garantía)"
-          value={`${efectividadHoy.toFixed(1)}%`}
+          value={`${efectividadSel.toFixed(1)}%`}
           delta={deltaEfectividad}
-          hint={`${countFinalizadasHoy}/${instHoyValidas.length || 0} finalizadas válidas`}
+          hint={`${countFinalizadasSel}/${instSelValidas.length || 0} finalizadas válidas`}
         />
         <Kpi
-          label="Prod: Finalizadas/Cuadrilla"
-          value={prodHoy.toFixed(2)}
+          label="Prod: Finalizadas/Cuadrilla asistida"
+          value={prodSel.toFixed(2)}
           delta={deltaProd}
-          hint="Finalizadas válidas / Cuadrillas asistidas"
+          hint="Finalizadas válidas / Cuadrillas con asistencia"
         />
         <Kpi
           label="Finalizadas (sin garantía)"
-          value={countFinalizadasHoy}
-          delta={countFinalizadasHoy - countFinalizadasAyer}
-          hint={`Comparado con ayer (${countFinalizadasAyer})`}
+          value={countFinalizadasSel}
+          delta={countFinalizadasSel - countFinalizadasPrev}
+          hint={`Vs período anterior (${countFinalizadasPrev})`}
+        />
+        <Kpi
+          label="Descansos (programados)"
+          value={descansosSel}
+          delta={NaN}
+          hint="No cuentan para % asistencia"
         />
         <Kpi
           label="Tiempo de ciclo promedio"
@@ -872,7 +1137,7 @@ const completarCuadrilla = () => {
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <Card title="Top Zonas/Distritos (Finalizadas válidas)">
           {cargando ? <Skeleton rows={6} /> : topZonasData.length === 0 ? (
-            <Empty title="Sin datos" desc="No hay finalizadas válidas para esta fecha y filtros." />
+            <Empty title="Sin datos" desc="No hay finalizadas válidas para el período y filtros." />
           ) : (
             <ResponsiveContainer width="100%" height={280}>
               <BarChart data={topZonasData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
@@ -887,7 +1152,7 @@ const completarCuadrilla = () => {
         </Card>
 
         <Card title="Estados de instalaciones (válidas)">
-          {instHoyValidas.length === 0 ? (
+          {instSelValidas.length === 0 ? (
             <Empty title="Sin instalaciones válidas" desc="No hay registros distintos a garantía." />
           ) : (
             <ResponsiveContainer width="100%" height={280}>
@@ -895,7 +1160,7 @@ const completarCuadrilla = () => {
                 <Pie
                   data={(function() {
                     const acc = {};
-                    instHoyValidas.forEach(i => {
+                    instSelValidas.forEach(i => {
                       const e = (i.estado || "otro").toLowerCase();
                       acc[e] = (acc[e] || 0) + 1;
                     });
@@ -905,7 +1170,7 @@ const completarCuadrilla = () => {
                   outerRadius={100}
                   label={({ name, value }) => `${name}: ${value}`}
                 >
-                  {Object.keys((function(){const a={};instHoyValidas.forEach(i=>{const e=(i.estado||"otro").toLowerCase();a[e]=(a[e]||0)+1});return a;})()).map((_, idx) => (
+                  {Object.keys((function(){const a={};instSelValidas.forEach(i=>{const e=(i.estado||"otro").toLowerCase();a[e]=(a[e]||0)+1});return a;})()).map((_, idx) => (
                     <Cell key={idx} fill={COLORS[idx % COLORS.length]} />
                   ))}
                 </Pie>
@@ -919,7 +1184,7 @@ const completarCuadrilla = () => {
 
       {/* Tendencias y Mapa */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <Card title="Tendencia 7 días — % Asistencia (con técnicos) vs Efectividad">
+        <Card title="Tendencia 7 días — % Asistencia (sin descansos) vs Efectividad">
           <ResponsiveContainer width="100%" height={280}>
             <LineChart data={tendencia7} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" />
@@ -963,9 +1228,9 @@ const completarCuadrilla = () => {
           )}
         </Card>
 
-        {/* Detalle rápido SIN plan y SIN garantía */}
+        {/* Detalle rápido */}
         <Card title="Detalle rápido — Instalaciones (Estado / Distrito) — SIN garantía">
-          {instHoyValidas.length === 0 ? (
+          {instSelValidas.length === 0 ? (
             <Empty />
           ) : (
             <div className="max-h-80 overflow-auto rounded-xl border border-slate-200 dark:border-slate-700">
@@ -978,7 +1243,7 @@ const completarCuadrilla = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {instHoyValidas.map((i) => (
+                  {instSelValidas.map((i) => (
                     <tr key={i.id} className="border-t border-slate-100 dark:border-slate-700">
                       <td className="px-3 py-2">{i.cliente || i.codigoCliente || i.id}</td>
                       <td className="px-3 py-2 capitalize">{(i.estado || "—").toLowerCase()}</td>
@@ -991,7 +1256,7 @@ const completarCuadrilla = () => {
           )}
         </Card>
 
-        <Card title="Top Cuadrillas — Finalizadas válidas (hoy)">
+        <Card title="Top Cuadrillas — Finalizadas válidas (período)">
           {topCuadrillas.length === 0 ? (
             <Empty title="Sin datos de cuadrillas" />
           ) : (
@@ -1017,11 +1282,11 @@ const completarCuadrilla = () => {
         </Card>
       </div>
 
-      {/* Avanzado: tabla completa del filtro (con plan) */}
+      {/* Avanzado */}
       {showAvanzado && (
         <div className="grid grid-cols-1 gap-6">
           <Card title="Tabla rápida — Instalaciones (filtro aplicado) — SIN garantía">
-            {instHoyValidas.length === 0 ? (
+            {instSelValidas.length === 0 ? (
               <Empty />
             ) : (
               <div className="max-h-96 overflow-auto rounded-xl border border-slate-200 dark:border-slate-700">
@@ -1034,18 +1299,20 @@ const completarCuadrilla = () => {
                       <th className="px-2 py-2 text-left">Zona</th>
                       <th className="px-2 py-2 text-left">Región</th>
                       <th className="px-2 py-2 text-left">ZonaCuadrilla</th>
+                      <th className="px-2 py-2 text-left">Tipo Cuadrilla</th>
                       <th className="px-2 py-2 text-left">Cuadrilla</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {instHoyValidas.map((i) => (
+                    {instSelValidas.map((i) => (
                       <tr key={i.id} className="border-t border-slate-100 dark:border-slate-700">
                         <td className="px-2 py-2">{i.cliente || i.codigoCliente || i.id}</td>
                         <td className="px-2 py-2">{(i.estado || "").toLowerCase()}</td>
                         <td className="px-2 py-2">{i.plan || i.planServicio || i.tipoInstalacion || i.tipoInstalación || "—"}</td>
                         <td className="px-2 py-2">{i._zona || "—"}</td>
-                        <td className="px-2 py-2">{i.region || "—"}</td>
+                        <td className="px-2 py-2">{i._region || "—"}</td>
                         <td className="px-2 py-2">{i.zonaCuadrilla || "—"}</td>
+                        <td className="px-2 py-2">{i._tipoCuadrilla || "—"}</td>
                         <td className="px-2 py-2">{i._cuadrillaNombre || "—"}</td>
                       </tr>
                     ))}
