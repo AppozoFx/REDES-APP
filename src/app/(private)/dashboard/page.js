@@ -781,53 +781,57 @@ export default function Dashboard() {
   }, [finalizadasSel]);
 
   /* =========================
+   Finalizadas por CUADRILLA (todas) para el período filtrado
+========================= */
+
+
+
+
+const barrasCuadrillas = useMemo(() => {
+  const acc = {};
+  for (const i of finalizadasSel) {
+    const c = i._cuadrillaNombre || "Sin Cuadrilla";
+    acc[c] = (acc[c] || 0) + 1;
+  }
+  return Object.entries(acc)
+    .map(([cuadrilla, finalizadas]) => ({ cuadrilla, finalizadas }))
+    .sort((a, b) => b.finalizadas - a.finalizadas); // desc
+}, [finalizadasSel]);
+
+
+  /* =========================
      Tendencia 7 días (anclada al último día del período seleccionado)
   ========================== */
-  const tendencia7 = useMemo(() => {
-    const arr = [];
-    for (let d = 6; d >= 0; d--) {
-      const ymd = dayjs(fechaRef).subtract(d, "day").format("YYYY-MM-DD");
+  // ❌ Elimina COMPLETAMENTE el useMemo de `tendencia7`
+// ✅ Agrega esto en su lugar:
+const tendenciaPeriodo = useMemo(() => {
+  return fechasSel.map((ymd) => {
+    const instD = instalacionesAll
+      .filter(i => i._fechaYMD === ymd)
+      .map(i => ({
+        ...i,
+        _zona: i.zona || "Sin Zona",
+        _region: i.region || "",
+        _tipoCuadrilla: i.tipoCuadrilla || "",
+        _gestor: personaDe(i.gestor || i.gestorCuadrilla || i.gestorNombre || i.gestorCuadrillaNombre || ""),
+        _coordinador: personaDe(i.coordinador || i.coordinadorCuadrilla || i.coordinadorNombre || i.coordinadorCuadrillaNombre || ""),
+        _cuadrillaNombre: i._cuadrillaNombre || "",
+      }))
+      .filter(pasaFiltroInst);
 
-      const instD = instalacionesAll
-        .filter(i => i._fechaYMD === ymd)
-        .map(i => {
-          return {
-            ...i,
-            _zona: i.zona || "Sin Zona",
-            _region: i.region || "",
-            _tipoCuadrilla: i.tipoCuadrilla || "",
-            _gestor: personaDe(i.gestor || i.gestorCuadrilla || i.gestorNombre || i.gestorCuadrillaNombre || ""),
-            _coordinador: personaDe(i.coordinador || i.coordinadorCuadrilla || i.coordinadorNombre || i.coordinadorCuadrillaNombre || ""),
-            _cuadrillaNombre: i._cuadrillaNombre || "",
-          };
-        })
-        .filter(pasaFiltroInst);
+    const instDValidas = instD.filter(i => (i.tipoServicio || "").toLowerCase() !== "garantia");
+    const finD = instDValidas.filter(i => (i.estado || "").toLowerCase() === "finalizada").length;
+    const efectD = instDValidas.length > 0 ? (finD / instDValidas.length) * 100 : 0;
 
-      const instDValidas = instD.filter(i => (i.tipoServicio || "").toLowerCase() !== "garantia");
-      const finD = instDValidas.filter(i => (i.estado || "").toLowerCase() === "finalizada").length;
-      const efectD = instDValidas.length > 0 ? (finD / instDValidas.length) * 100 : 0;
+    return { fecha: ymd.slice(5), efectividad: Number(efectD.toFixed(1)) };
+  });
+}, [
+  fechasSel.join("|"),
+  instalacionesAll,
+  fZona, fRegion, fTipoCuadrilla, fGestor, fCoordinador, fCuadrilla,
+  usuariosIdx
+]);
 
-      // asistencia del día y % asistencia (sin descansos) con técnicos
-      const tecSet = new Set(
-        asistenciaTecnicosAll
-          .filter(t => toYMD(t.fecha) === ymd)
-          .map(t => normCuad(t.cuadrillaNombre || t.cuadrilla || t.nombreCuadrilla || t.cuadrillaId)) // <-- añadido cuadrillaId
-          .filter(Boolean)
-      );
-
-      const asisDia = asistenciaCuadrillasAll
-        .filter(c => c.fecha === ymd)
-        .map(c => ({ ...c, _key: normCuad(c.nombre || c.cuadrillaNombre || c.cuadrillaId || c.cuadrilla) }))
-        .filter(c => tecSet.has(c._key));
-
-      const validos = asisDia.filter(c => ["asistencia", "falta"].includes((c.estado || "").toLowerCase()));
-      const ok = validos.filter(c => (c.estado || "").toLowerCase() === "asistencia");
-      const pctAsisD = validos.length > 0 ? (ok.length / validos.length) * 100 : 0;
-
-      arr.push({ fecha: ymd.slice(5), pctAsistencia: Number(pctAsisD.toFixed(1)), efectividad: Number(efectD.toFixed(1)) });
-    }
-    return arr;
-  }, [fechaRef, instalacionesAll, asistenciaCuadrillasAll, asistenciaTecnicosAll, fZona, fRegion, fTipoCuadrilla, fGestor, fCoordinador, fCuadrilla, usuariosIdx]);
 
   /* =========================
      Exportar Excel
@@ -1133,6 +1137,38 @@ export default function Dashboard() {
         />
       </div>
 
+
+
+      {/* Barras por cuadrilla — todas las cuadrillas del período filtrado */}
+<Card title="Finalizadas por Cuadrilla (período filtrado)">
+  {barrasCuadrillas.length === 0 ? (
+    <Empty title="Sin datos" desc="No hay finalizadas para el período y filtros." />
+  ) : (
+    <div className="overflow-x-auto">
+      {/* Ancho dinámico para que quepan todas las barras en una sola fila */}
+      <div style={{ width: Math.max(700, barrasCuadrillas.length * 110), height: 280 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={barrasCuadrillas} margin={{ top: 8, right: 16, left: 0, bottom: 48 }}>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis
+              dataKey="cuadrilla"
+              interval={0}
+              angle={-35}
+              textAnchor="end"
+              height={60}
+            />
+            <YAxis allowDecimals={false} />
+            <Tooltip />
+            <Bar dataKey="finalizadas" />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  )}
+</Card>
+
+
+
       {/* Gráficos principales */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <Card title="Top Zonas/Distritos (Finalizadas válidas)">
@@ -1182,21 +1218,26 @@ export default function Dashboard() {
         </Card>
       </div>
 
+
+     
+
+
       {/* Tendencias y Mapa */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <Card title="Tendencia 7 días — % Asistencia (sin descansos) vs Efectividad">
-          <ResponsiveContainer width="100%" height={280}>
-            <LineChart data={tendencia7} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="fecha" />
-              <YAxis domain={[0, 100]} />
-              <Tooltip />
-              <Legend />
-              <Line type="monotone" dataKey="pctAsistencia" name="% Asistencia" />
-              <Line type="monotone" dataKey="efectividad" name="Efectividad %" />
-            </LineChart>
-          </ResponsiveContainer>
-        </Card>
+        <Card title="Tendencia — Efectividad (%) en el período seleccionado">
+  <ResponsiveContainer width="100%" height={280}>
+    <LineChart data={tendenciaPeriodo} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+      <CartesianGrid strokeDasharray="3 3" />
+      <XAxis dataKey="fecha" />
+      <YAxis domain={[0, 100]} />
+      <Tooltip />
+      <Legend />
+      <Line type="monotone" dataKey="efectividad" name="Efectividad %" />
+    </LineChart>
+  </ResponsiveContainer>
+</Card>
+
+
 
         <Card
           title="Mapa rápido — Finalizadas / Pendientes / Reprogramadas"
@@ -1284,45 +1325,62 @@ export default function Dashboard() {
 
       {/* Avanzado */}
       {showAvanzado && (
-        <div className="grid grid-cols-1 gap-6">
-          <Card title="Tabla rápida — Instalaciones (filtro aplicado) — SIN garantía">
-            {instSelValidas.length === 0 ? (
-              <Empty />
-            ) : (
-              <div className="max-h-96 overflow-auto rounded-xl border border-slate-200 dark:border-slate-700">
-                <table className="min-w-full text-xs">
-                  <thead className="sticky top-0 bg-slate-50 text-slate-600 dark:bg-slate-900 dark:text-slate-300">
-                    <tr>
-                      <th className="px-2 py-2 text-left">Cliente</th>
-                      <th className="px-2 py-2 text-left">Estado</th>
-                      <th className="px-2 py-2 text-left">Plan</th>
-                      <th className="px-2 py-2 text-left">Zona</th>
-                      <th className="px-2 py-2 text-left">Región</th>
-                      <th className="px-2 py-2 text-left">ZonaCuadrilla</th>
-                      <th className="px-2 py-2 text-left">Tipo Cuadrilla</th>
-                      <th className="px-2 py-2 text-left">Cuadrilla</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {instSelValidas.map((i) => (
-                      <tr key={i.id} className="border-t border-slate-100 dark:border-slate-700">
-                        <td className="px-2 py-2">{i.cliente || i.codigoCliente || i.id}</td>
-                        <td className="px-2 py-2">{(i.estado || "").toLowerCase()}</td>
-                        <td className="px-2 py-2">{i.plan || i.planServicio || i.tipoInstalacion || i.tipoInstalación || "—"}</td>
-                        <td className="px-2 py-2">{i._zona || "—"}</td>
-                        <td className="px-2 py-2">{i._region || "—"}</td>
-                        <td className="px-2 py-2">{i.zonaCuadrilla || "—"}</td>
-                        <td className="px-2 py-2">{i._tipoCuadrilla || "—"}</td>
-                        <td className="px-2 py-2">{i._cuadrillaNombre || "—"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </Card>
+  <div className="grid grid-cols-1 gap-6">
+    <Card title="Tabla rápida — Instalaciones FINALIZADAS (filtro aplicado) — SIN garantía">
+      {finalizadasSel.length === 0 ? (
+        <Empty title="Sin finalizadas válidas" desc="No hay instalaciones finalizadas para el período y filtros." />
+      ) : (
+        <div className="max-h-96 overflow-auto rounded-xl border border-slate-200 dark:border-slate-700">
+          <table className="min-w-full text-xs">
+            <thead className="sticky top-0 bg-slate-50 text-slate-600 dark:bg-slate-900 dark:text-slate-300">
+  <tr>
+    <th className="px-2 py-2 text-left">Fecha</th>
+    <th className="px-2 py-2 text-left">Código Cliente</th> {/* NUEVA */}
+    <th className="px-2 py-2 text-left">Cliente</th>
+    <th className="px-2 py-2 text-left">Estado</th>
+    <th className="px-2 py-2 text-left">Plan</th>
+    <th className="px-2 py-2 text-left">Zona</th>
+    <th className="px-2 py-2 text-left">Tipo Cuadrilla</th>
+    <th className="px-2 py-2 text-left">Cuadrilla</th>
+    <th className="px-2 py-2 text-left">Hora inicio</th>
+    <th className="px-2 py-2 text-left">Hora fin</th>
+  </tr>
+</thead>
+
+
+            <tbody>
+              {finalizadasSel
+                // ordenar por fecha (más reciente primero). Cambia a (a-b) si prefieres ascendente.
+                .slice()
+                .sort((a, b) => dayjs(a._fechaYMD).valueOf() - dayjs(b._fechaYMD).valueOf())
+                .map((i) => {
+                  const ini = parseFechaHora(i.horaInicio || i.inicio || i.horaInicioTrabajo, i._fechaYMD);
+                  const fin = parseFechaHora(i.horaFin || i.fin || i.horaFinTrabajo, i._fechaYMD);
+                  return (
+                    <tr key={i.id} className="border-t border-slate-100 dark:border-slate-700">
+  <td className="px-2 py-2">{i._fechaYMD || "—"}</td>
+  <td className="px-2 py-2">{i.codigoCliente || i.codigo || "—"}</td> {/* NUEVA */}
+  <td className="px-2 py-2">{i.cliente || i.nombreCliente || i.razonSocial || "—"}</td>
+  <td className="px-2 py-2 capitalize">{(i.estado || "—").toLowerCase()}</td>
+  <td className="px-2 py-2">{i.plan || i.planServicio || i.tipoInstalacion || i.tipoInstalación || "—"}</td>
+  <td className="px-2 py-2">{i._zona || "—"}</td>
+  <td className="px-2 py-2">{i._tipoCuadrilla || i.tipoCuadrilla || "—"}</td>
+  <td className="px-2 py-2">{i._cuadrillaNombre || "—"}</td>
+  <td className="px-2 py-2">{ini ? ini.format("HH:mm") : "—"}</td>
+  <td className="px-2 py-2">{fin ? fin.format("HH:mm") : "—"}</td>
+</tr>
+
+                  );
+                })}
+            </tbody>
+          </table>
         </div>
       )}
+    </Card>
+  </div>
+)}
+
+
     </div>
   );
 }
