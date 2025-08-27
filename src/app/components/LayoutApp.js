@@ -213,7 +213,13 @@ export default function LayoutApp({ children }) {
       { href: "/almacen/venta-materiales", label: "Venta/Despacho Materiales", icon: I(ShoppingCart), roles: ["Almacén","Gerencia","TI"] },
       { href: "/almacen/equipos", label: "Inventario Equipos", icon: I(PackageSearch), roles: ["Almacén","TI"] },
       { href: "/almacen/devolucion", label: "Devolución Equipos", icon: I(PackageOpen), roles: ["Almacén","TI"] },
-      { href: "/almacen/recepcion-actas", label: "Recepción Actas", icon: I(FileStack), roles: ["Almacén","TI"] }
+      { href: "/almacen/recepcion-actas", label: "Recepción Actas", icon: I(FileStack), roles: ["Almacén","TI"] },
+      { 
+      href: "/almacen/abastecimiento-cuadrillas", 
+      label: "Abastecimiento Cuadrillas", 
+      icon: I(Package),     // 👉 aquí puedes poner otro icono si prefieres
+      roles: ["Almacén","Gerencia","TI"] 
+    }
     ]
   },
   {

@@ -180,6 +180,10 @@ export default function Dashboard() {
     return { start, end, etiqueta };
   }, [rangoTipo, fechaDia, semana, semanaIni, semanaFin, mesVal]);
 
+
+  
+
+
   const periodoPrev = useMemo(() => {
     let start, end;
     if (rangoTipo === "dia") {
@@ -230,6 +234,8 @@ export default function Dashboard() {
   const [fGestor, setFGestor] = useState("");
   const [fCoordinador, setFCoordinador] = useState("");
   const [fCuadrilla, setFCuadrilla] = useState(""); // texto libre
+  const [fRC, setFRC] = useState(""); // Residencial / Condominio
+
 
   // metas
   const [metaInstalaciones, setMetaInstalaciones] = useState(100);
@@ -343,17 +349,23 @@ export default function Dashboard() {
 
   // Meta por cuadrilla desde instalaciones (para completar región/tipo si falta en asistencia)
   const instalacionesPeriodoEnriq = useMemo(() => {
-    // enriquecer cada instalación con campos unificados
-    return instalacionesPeriodoBase.map(i => {
-      const _zona = i.zona || "Sin Zona";
-      const _region = i.region || "";
-      const _tipoCuadrilla = i.tipoCuadrilla || "";
-      const _gestor = personaDe(i.gestor || i.gestorCuadrilla || i.gestorNombre || i.gestorCuadrillaNombre || "");
-      const _coordinador = personaDe(i.coordinador || i.coordinadorCuadrilla || i.coordinadorNombre || i.coordinadorCuadrillaNombre || "");
-      const _cuadrillaNombre = i._cuadrillaNombre || "";
-      return { ...i, _zona, _region, _tipoCuadrilla, _gestor, _coordinador, _cuadrillaNombre };
-    });
-  }, [instalacionesPeriodoBase, usuariosIdx]);
+  return instalacionesPeriodoBase.map(i => {
+    const _zona = i.zona || "Sin Zona";
+    const _region = i.region || "";
+    const _tipoCuadrilla = i.tipoCuadrilla || "";
+    const _gestor = personaDe(i.gestor || i.gestorCuadrilla || i.gestorNombre || i.gestorCuadrillaNombre || "");
+    const _coordinador = personaDe(i.coordinador || i.coordinadorCuadrilla || i.coordinadorNombre || i.coordinadorCuadrillaNombre || "");
+    const _cuadrillaNombre = i._cuadrillaNombre || "";
+
+    // R/C robusto (ajusta las fuentes a tu data real si quieres)
+    const _rc =
+      i.rc || i.RC || i.residencial || i.condominio || i.residencialCondominio ||
+      i.tipoRC || i.condominioResidencial || i.rcTipo || "";
+
+    return { ...i, _zona, _region, _tipoCuadrilla, _gestor, _coordinador, _cuadrillaNombre, _rc };
+  });
+}, [instalacionesPeriodoBase, usuariosIdx]);
+
 
   // índice meta por cuadrilla normalizada
   const idxMetaCuadrilla = useMemo(() => {
@@ -369,6 +381,7 @@ export default function Dashboard() {
           gestor: i._gestor,
           coordinador: i._coordinador,
           nombre: i._cuadrillaNombre,
+          rc: i._rc, // <-- NUEVO
         };
       }
     }
@@ -438,6 +451,17 @@ export default function Dashboard() {
     return Array.from(m.values()).sort((a, b) => a.localeCompare(b));
   }, [instalacionesPeriodoEnriq]);
 
+  const opcionesRC = useMemo(() => {
+  const m = new Map();
+  for (const i of instalacionesPeriodoEnriq) {
+    const label = (i._rc || "").toString();
+    const key = norm(label);
+    if (key) m.set(key, label);
+  }
+  return Array.from(m.values()).sort((a, b) => a.localeCompare(b));
+}, [instalacionesPeriodoEnriq]);
+
+
   // Filtro principal para instalaciones seleccionadas (para el resto de paneles)
   const pasaFiltroInst = (i) => {
     if (fZona && norm(i._zona || "Sin Zona") !== norm(fZona)) return false;
@@ -446,13 +470,16 @@ export default function Dashboard() {
     if (fGestor && norm(i._gestor || "") !== norm(fGestor)) return false;
     if (fCoordinador && norm(i._coordinador || "") !== norm(fCoordinador)) return false;
     if (fCuadrilla && !norm(i._cuadrillaNombre || "").includes(norm(fCuadrilla))) return false;
+    if (fRC && norm(i._rc || "") !== norm(fRC)) return false; // <-- NUEVO
+
     return true;
   };
 
   const instalacionesSel = useMemo(
-    () => instalacionesPeriodoEnriq.filter(pasaFiltroInst),
-    [instalacionesPeriodoEnriq, fZona, fRegion, fTipoCuadrilla, fGestor, fCoordinador, fCuadrilla]
-  );
+  () => instalacionesPeriodoEnriq.filter(pasaFiltroInst),
+  [instalacionesPeriodoEnriq, fZona, fRegion, fTipoCuadrilla, fGestor, fCoordinador, fCuadrilla, fRC]
+);
+
 
   /* =========================
      Asistencia (SOLO asistencia) — no depende de instalaciones
@@ -496,6 +523,7 @@ export default function Dashboard() {
           _tipoCuadrilla: c.tipoCuadrilla || c.tipo || meta.tipoCuadrilla || "",
           _gestor: personaDe(c.gestor || meta.gestor || ""),
           _coordinador: personaDe(c.coordinador || meta.coordinador || ""),
+          _rc: c.rc || meta.rc || "", // <-- NUEVO
         };
       })
       .filter(c => {
@@ -505,6 +533,8 @@ export default function Dashboard() {
         if (fGestor && norm(c._gestor) !== norm(fGestor)) return false;
         if (fCoordinador && norm(c._coordinador) !== norm(fCoordinador)) return false;
         if (fCuadrilla && !norm(c._nombre).includes(norm(fCuadrilla))) return false;
+        if (fRC && norm(c._rc) !== norm(fRC)) return false; // <-- NUEVO
+
         return true;
       });
     return filas;
@@ -548,6 +578,44 @@ export default function Dashboard() {
     [instalacionesSel]
   );
 
+
+  const barrasDiaCuadrilla = useMemo(() => {
+  // Top 5 cuadrillas por total finalizadas en el período
+  const totalPorCuad = {};
+  for (const i of instSelValidas) {
+    if ((i.estado || "").toLowerCase() !== "finalizada") continue;
+    const c = i._cuadrillaNombre || "Sin Cuadrilla";
+    totalPorCuad[c] = (totalPorCuad[c] || 0) + 1;
+  }
+  const topCuads = Object.entries(totalPorCuad)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([c]) => c);
+
+  // Estructura por día
+  const dias = fechasSel; // YYYY-MM-DD del período seleccionado
+  const base = dias.map(d => {
+    const key = d.slice(5); // MM-DD
+    const row = { dia: key };
+    for (const c of topCuads) row[c] = 0;
+    return row;
+  });
+  const idx = Object.fromEntries(base.map(r => [r.dia, r]));
+
+  for (const i of instSelValidas) {
+    if ((i.estado || "").toLowerCase() !== "finalizada") continue;
+    const c = i._cuadrillaNombre || "Sin Cuadrilla";
+    if (!topCuads.includes(c)) continue;
+    const k = (i._fechaYMD || "").slice(5);
+    if (idx[k]) idx[k][c] += 1;
+  }
+
+  return { data: base, series: topCuads };
+}, [instSelValidas, fechasSel.join("|")]);
+
+
+
+
   // período anterior (misma lógica de asistencia sin instalaciones)
   const instalacionesPrevBase = useMemo(
     () => instalacionesAll.filter(i => setFechasPrev.has(i._fechaYMD)),
@@ -555,16 +623,24 @@ export default function Dashboard() {
   );
 
   const instalacionesPrevEnriq = useMemo(() => {
-    return instalacionesPrevBase.map(i => {
+  return instalacionesPrevBase
+    .map(i => {
       const _zona = i.zona || "Sin Zona";
       const _region = i.region || "";
       const _tipoCuadrilla = i.tipoCuadrilla || "";
       const _gestor = personaDe(i.gestor || i.gestorCuadrilla || i.gestorNombre || i.gestorCuadrillaNombre || "");
       const _coordinador = personaDe(i.coordinador || i.coordinadorCuadrilla || i.coordinadorNombre || i.coordinadorCuadrillaNombre || "");
       const _cuadrillaNombre = i._cuadrillaNombre || "";
-      return { ...i, _zona, _region, _tipoCuadrilla, _gestor, _coordinador, _cuadrillaNombre };
-    }).filter(pasaFiltroInst);
-  }, [instalacionesPrevBase, usuariosIdx, fZona, fRegion, fTipoCuadrilla, fGestor, fCoordinador, fCuadrilla]);
+
+      const _rc =
+        i.rc || i.RC || i.residencial || i.condominio || i.residencialCondominio ||
+        i.tipoRC || i.condominioResidencial || i.rcTipo || "";
+
+      return { ...i, _zona, _region, _tipoCuadrilla, _gestor, _coordinador, _cuadrillaNombre, _rc };
+    })
+    .filter(pasaFiltroInst);
+}, [instalacionesPrevBase, usuariosIdx, fZona, fRegion, fTipoCuadrilla, fGestor, fCoordinador, fCuadrilla, fRC]);
+
 
   const instPrevValidas = useMemo(
     () => instalacionesPrevEnriq.filter(i => (i.tipoServicio || "").toLowerCase() !== "garantia"),
@@ -573,49 +649,74 @@ export default function Dashboard() {
 
   // meta anterior por cuadrilla
   const idxMetaPrev = useMemo(() => {
-    const m = {};
-    for (const i of instalacionesPrevEnriq) {
-      const k = normCuad(i._cuadrillaNombre);
-      if (!k) continue;
-      if (!m[k]) {
-        m[k] = {
-          zona: i._zona, region: i._region, tipoCuadrilla: i._tipoCuadrilla,
-          gestor: i._gestor, coordinador: i._coordinador, nombre: i._cuadrillaNombre,
-        };
-      }
+  const m = {};
+  for (const i of instalacionesPrevEnriq) {
+    const k = normCuad(i._cuadrillaNombre);
+    if (!k) continue;
+    if (!m[k]) {
+      m[k] = {
+        zona: i._zona,
+        region: i._region,
+        tipoCuadrilla: i._tipoCuadrilla,
+        gestor: i._gestor,
+        coordinador: i._coordinador,
+        nombre: i._cuadrillaNombre,
+        rc: i._rc // <-- NUEVO
+      };
     }
-    return m;
-  }, [instalacionesPrevEnriq]);
+  }
+  return m;
+}, [instalacionesPrevEnriq]);
+
 
   // asistencia anterior con misma lógica
   const asistenciaPrevFiltrada = useMemo(() => {
-    const filas = asistenciaCuadrillasAll
-      .filter(c => setFechasPrev.has(c.fecha))
-      .map(c => {
-        const key = normCuad(c.nombre || c.cuadrillaNombre || c.cuadrillaId || c.cuadrilla);
-        const meta = idxMetaPrev[key] || {};
-        return {
-          ...c,
-          _key: key,
-          _nombre: c.nombre || meta.nombre || c.cuadrilla || "",
-          _zona: c.zona || meta.zona || "Sin Zona",
-          _region: c.region || meta.region || "",
-          _tipoCuadrilla: c.tipoCuadrilla || c.tipo || meta.tipoCuadrilla || "",
-          _gestor: personaDe(c.gestor || meta.gestor || ""),
-          _coordinador: personaDe(c.coordinador || meta.coordinador || ""),
-        };
-      })
-      .filter(c => {
-        if (fZona && norm(c._zona) !== norm(fZona)) return false;
-        if (fRegion && norm(c._region) !== norm(fRegion)) return false;
-        if (fTipoCuadrilla && norm(c._tipoCuadrilla) !== norm(fTipoCuadrilla)) return false;
-        if (fGestor && norm(c._gestor) !== norm(fGestor)) return false;
-        if (fCoordinador && norm(c._coordinador) !== norm(fCoordinador)) return false;
-        if (fCuadrilla && !norm(c._nombre).includes(norm(fCuadrilla))) return false;
-        return true;
-      });
-    return filas;
-  }, [asistenciaCuadrillasAll, setFechasPrev, idxMetaPrev, fZona, fRegion, fTipoCuadrilla, fGestor, fCoordinador, fCuadrilla, usuariosIdx]);
+  const filas = asistenciaCuadrillasAll
+    .filter(c => setFechasPrev.has(c.fecha))
+    .map(c => {
+      const key = normCuad(c.nombre || c.cuadrillaNombre || c.cuadrillaId || c.cuadrilla);
+      const meta = idxMetaPrev[key] || {};
+      return {
+        ...c,
+        _key: key,
+        _nombre: c.nombre || meta.nombre || c.cuadrilla || "",
+        _zona: c.zona || meta.zona || "Sin Zona",            // puedes mantenerlo
+        _region: c.region || meta.region || "",
+        _tipoCuadrilla: c.tipoCuadrilla || c.tipo || meta.tipoCuadrilla || "",
+        _gestor: personaDe(c.gestor || meta.gestor || ""),
+        _coordinador: personaDe(c.coordinador || meta.coordinador || ""),
+        _rc: c.rc || meta.rc || ""                            // <-- NUEVO
+      };
+    })
+    .filter(c => {
+      // NUEVO: filtro por R/C
+      if (fRC && norm(c._rc) !== norm(fRC)) return false;
+
+      // Si ya migraste todo a R/C y dejaste de usar zona, puedes quitar este if de fZona:
+      // if (fZona && norm(c._zona) !== norm(fZona)) return false;
+
+      if (fRegion && norm(c._region) !== norm(fRegion)) return false;
+      if (fTipoCuadrilla && norm(c._tipoCuadrilla) !== norm(fTipoCuadrilla)) return false;
+      if (fGestor && norm(c._gestor) !== norm(fGestor)) return false;
+      if (fCoordinador && norm(c._coordinador) !== norm(fCoordinador)) return false;
+      if (fCuadrilla && !norm(c._nombre).includes(norm(fCuadrilla))) return false;
+      return true;
+    });
+  return filas;
+}, [
+  asistenciaCuadrillasAll,
+  setFechasPrev,
+  idxMetaPrev,
+  fRC,                 // <-- NUEVO en dependencias
+  // fZona,            // <-- si ya no usas zona, quítalo
+  fRegion,
+  fTipoCuadrilla,
+  fGestor,
+  fCoordinador,
+  fCuadrilla,
+  usuariosIdx
+]);
+
 
   // índice técnicos anterior
   const idxTecPrevPorDia = useMemo(() => {
@@ -789,14 +890,19 @@ export default function Dashboard() {
 
 const barrasCuadrillas = useMemo(() => {
   const acc = {};
-  for (const i of finalizadasSel) {
+  for (const i of instSelValidas) {
     const c = i._cuadrillaNombre || "Sin Cuadrilla";
-    acc[c] = (acc[c] || 0) + 1;
+    if (!acc[c]) acc[c] = { cuadrilla: c, finalizadas: 0, canceladas: 0 };
+
+    const e = (i.estado || "").toLowerCase();
+    if (e === "finalizada") acc[c].finalizadas += 1;
+    if (e.startsWith("cancel")) acc[c].canceladas += 1; // robusto con "cancelada", "cancelado", etc.
   }
-  return Object.entries(acc)
-    .map(([cuadrilla, finalizadas]) => ({ cuadrilla, finalizadas }))
-    .sort((a, b) => b.finalizadas - a.finalizadas); // desc
-}, [finalizadasSel]);
+  return Object.values(acc).sort(
+    (a, b) => (b.finalizadas + b.canceladas) - (a.finalizadas + a.canceladas)
+  );
+}, [instSelValidas]);
+
 
 
   /* =========================
@@ -840,6 +946,7 @@ const tendenciaPeriodo = useMemo(() => {
     const hoja1 = [
       ["Período", periodo.etiqueta],
       ["Tipo", rangoTipo],
+      ["R/C", fRC || "Todos"],
       ["Zona", fZona || "Todas"],
       ["Región", fRegion || "Todas"],
       ["Tipo Cuadrilla", fTipoCuadrilla || "Todas"],
@@ -1010,12 +1117,17 @@ const tendenciaPeriodo = useMemo(() => {
       >
         <div className="grid grid-cols-1 gap-3 md:grid-cols-8">
           <div>
-            <label className="mb-1 block text-xs text-slate-500 dark:text-slate-400">Zona / Distrito</label>
-            <select className="w-full rounded-lg border border-slate-300 bg-white p-2 text-sm dark:border-slate-700 dark:bg-slate-800" value={fZona} onChange={(e) => setFZona(e.target.value)}>
-              <option value="">Todas</option>
-              {opcionesZonas.map(z => <option key={z} value={z}>{z}</option>)}
-            </select>
-          </div>
+  <label className="mb-1 block text-xs text-slate-500 dark:text-slate-400">(Residencial / Condominio)</label>
+  <select
+    className="w-full rounded-lg border border-slate-300 bg-white p-2 text-sm dark:border-slate-700 dark:bg-slate-800"
+    value={fRC}
+    onChange={(e) => setFRC(e.target.value)}
+  >
+    <option value="">Todos</option>
+    {opcionesRC.map(v => <option key={v} value={v}>{v}</option>)}
+  </select>
+</div>
+
           <div>
             <label className="mb-1 block text-xs text-slate-500 dark:text-slate-400">Región</label>
             <select className="w-full rounded-lg border border-slate-300 bg-white p-2 text-sm dark:border-slate-700 dark:bg-slate-800" value={fRegion} onChange={(e) => setFRegion(e.target.value)}>
@@ -1140,52 +1252,72 @@ const tendenciaPeriodo = useMemo(() => {
 
 
       {/* Barras por cuadrilla — todas las cuadrillas del período filtrado */}
-<Card title="Finalizadas por Cuadrilla (período filtrado)">
+<Card title="Finalizadas y Canceladas por Cuadrilla (sin garantía)">
   {barrasCuadrillas.length === 0 ? (
-    <Empty title="Sin datos" desc="No hay finalizadas para el período y filtros." />
+    <Empty title="Sin datos" desc="No hay instalaciones válidas para el período y filtros." />
   ) : (
-    <div className="overflow-x-auto">
-      {/* Ancho dinámico para que quepan todas las barras en una sola fila */}
-      <div style={{ width: Math.max(700, barrasCuadrillas.length * 110), height: 280 }}>
-        <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={barrasCuadrillas} margin={{ top: 8, right: 16, left: 0, bottom: 48 }}>
-            <CartesianGrid strokeDasharray="3 3" />
-            <XAxis
-              dataKey="cuadrilla"
-              interval={0}
-              angle={-35}
-              textAnchor="end"
-              height={60}
-            />
-            <YAxis allowDecimals={false} />
-            <Tooltip />
-            <Bar dataKey="finalizadas" />
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
-    </div>
+    <ResponsiveContainer width="100%" height={360}>
+      <BarChart
+        data={barrasCuadrillas}
+        margin={{ top: 8, right: 16, left: 0, bottom: 56 }}
+        barCategoryGap="18%"
+        barGap={4}
+      >
+        <CartesianGrid strokeDasharray="3 3" />
+        <XAxis
+          dataKey="cuadrilla"
+          interval={0}
+          angle={-28}
+          textAnchor="end"
+          height={60}
+        />
+        <YAxis allowDecimals={false} />
+        <Tooltip />
+        <Legend />
+        <Bar
+          dataKey="finalizadas"
+          name="Finalizadas"
+          fill="#10b981"          // verde
+          radius={[6, 6, 0, 0]}   // esquinas superiores redondeadas
+        />
+        <Bar
+          dataKey="canceladas"
+          name="Canceladas"
+          fill="#ef4444"          // rojo
+          radius={[6, 6, 0, 0]}
+        />
+      </BarChart>
+    </ResponsiveContainer>
   )}
 </Card>
 
 
 
+
+
       {/* Gráficos principales */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <Card title="Top Zonas/Distritos (Finalizadas válidas)">
-          {cargando ? <Skeleton rows={6} /> : topZonasData.length === 0 ? (
-            <Empty title="Sin datos" desc="No hay finalizadas válidas para el período y filtros." />
-          ) : (
-            <ResponsiveContainer width="100%" height={280}>
-              <BarChart data={topZonasData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="name" tick={{ fontSize: 12 }} />
-                <YAxis allowDecimals={false} />
-                <Tooltip />
-                <Bar dataKey="value" />
-              </BarChart>
-            </ResponsiveContainer>
-          )}
-        </Card>
+        {rangoTipo !== "dia" && (
+  <Card title="Finalizadas por día y cuadrilla (Top 5)">
+  {barrasDiaCuadrilla.series.length === 0 ? (
+    <Empty title="Sin datos" desc="No hay finalizadas válidas para el período y filtros." />
+  ) : (
+    <ResponsiveContainer width="100%" height={280}>
+      <BarChart data={barrasDiaCuadrilla.data} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+        <CartesianGrid strokeDasharray="3 3" />
+        <XAxis dataKey="dia" />
+        <YAxis allowDecimals={false} />
+        <Tooltip />
+        <Legend />
+        {barrasDiaCuadrilla.series.map((s, idx) => (
+          <Bar key={s} dataKey={s} name={s} />
+        ))}
+      </BarChart>
+    </ResponsiveContainer>
+  )}
+</Card>
+)}
+
 
         <Card title="Estados de instalaciones (válidas)">
           {instSelValidas.length === 0 ? (
