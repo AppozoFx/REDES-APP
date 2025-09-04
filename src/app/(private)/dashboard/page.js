@@ -205,8 +205,9 @@ export default function Dashboard() {
 
   const fechasDe = (p) => {
     const out = [];
-    let d = p.start;
-    while (d.diff(p.end, "day") <= 0) {
+    let d = p.start.startOf("day");
+    const end = p.end.startOf("day");
+    while (d.isSame(end) || d.isBefore(end)) {
       out.push(d.format("YYYY-MM-DD"));
       d = d.add(1, "day");
     }
