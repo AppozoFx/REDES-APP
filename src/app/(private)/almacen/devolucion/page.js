@@ -141,6 +141,15 @@ const generarPDFDevolucion = async (guiaId, datos) => {
     if (datos.metraje > 0) {
       docpdf.text(`Metros devueltos: ${datos.metraje} m`, 40, y, C); y += 5;
     }
+    if (datos.bobinaCompletaDevuelta) {
+  y += 2;
+  docpdf.setFont("helvetica", "bold");
+  docpdf.text("Bobina completa devuelta", 40, y, C);
+  docpdf.setFont("helvetica", "normal");
+  y += 5;
+}
+
+
 
     const mats = Object.entries(datos.materiales || {});
     if (mats.length > 0) {
@@ -452,18 +461,22 @@ export default function Devolucion() {
     }
 
     // bobina residencial
-    if (datosDevolucion.tipo === "Residencial" && datosDevolucion.drump) {
-      const bob = bobinasActivas.find(
-        (b) => (b.codigo || "").toUpperCase() === (datosDevolucion.drump || "").toUpperCase()
+if (datosDevolucion.tipo === "Residencial" && datosDevolucion.drump) {
+  const bob = bobinasActivas.find(
+    (b) => (b.codigo || "").toUpperCase() === (datosDevolucion.drump || "").toUpperCase()
+  );
+  if (!bob) {
+    errores.push(`• DRUMP ${datosDevolucion.drump} no está en stock de la cuadrilla.`);
+  } else {
+    const m = Number(datosDevolucion.metraje) || 0;
+    if (m > 0 && m > Number(bob.metros || 0)) {
+      errores.push(
+        `• DRUMP ${datosDevolucion.drump}: devuelves ${m} m y solo tiene ${bob.metros} m`
       );
-      if (!bob) {
-        errores.push(`• DRUMP ${datosDevolucion.drump} no está en stock de la cuadrilla.`);
-      } else if (Number(datosDevolucion.metraje) > Number(bob.metros || 0)) {
-        errores.push(
-          `• DRUMP ${datosDevolucion.drump}: devuelves ${datosDevolucion.metraje} m y solo tiene ${bob.metros} m`
-        );
-      }
     }
+  }
+}
+
 
     if (errores.length > 0) {
       toast.error("Revisa los montos devueltos:\n" + errores.join("\n"));
@@ -473,51 +486,72 @@ export default function Devolucion() {
   };
 
   /* ======= DRUMP residencial ======= */
-  const procesarDevolucionBobinaResidencial = async (batch, guiaId) => {
-    const drRef = doc(db, `cuadrillas/${datosDevolucion.cuadrillaId}/stock_bobinas`, datosDevolucion.drump);
-    const drSnap = await getDoc(drRef);
-    if (!drSnap.exists()) {
-      toast.error(`❌ El DRUMP ${datosDevolucion.drump} no existe en la cuadrilla.`);
-      throw new Error("DRUMP no encontrado");
-    }
+  const procesarDevolucionBobinaResidencial = async (batch, guiaId, { forceCierre = false } = {}) => {
+  const drRef = doc(db, `cuadrillas/${datosDevolucion.cuadrillaId}/stock_bobinas`, datosDevolucion.drump);
+  const drSnap = await getDoc(drRef);
+  if (!drSnap.exists()) {
+    toast.error(`❌ El DRUMP ${datosDevolucion.drump} no existe en la cuadrilla.`);
+    throw new Error("DRUMP no encontrado");
+  }
 
-    const datosBobina = drSnap.data();
-    if (Number(datosDevolucion.metraje) > Number(datosBobina.metros || 0)) {
-      toast.error(`❌ No puedes devolver más de ${datosBobina.metros} metros.`);
-      throw new Error("Metros inválidos");
-    }
+  const datosBobina = drSnap.data();
 
-    const metrosRestantes = Number(datosBobina.metros || 0) - Number(datosDevolucion.metraje || 0);
+  if (forceCierre) {
+    // Devolución de bobina completa: estado devuelto y metros 0
+    batch.set(
+      drRef,
+      {
+        metros: 0,
+        estado: "devuelto",
+        f_devolucion: serverTimestamp(),
+        guia_devolucion: guiaId,
+        usuario: datosDevolucion.usuario,
+      },
+      { merge: true }
+    );
+    toast.success(`♻️ Bobina ${datosDevolucion.drump} marcada como *devuelto* (0 m).`);
+    // Importante: no sumamos metros al almacén en este modo.
+    return;
+  }
 
-    if (metrosRestantes <= 0) {
-      // 🔁 dejar registro
-      batch.set(
-        drRef,
-        {
-          metros: 0,
-          estado: "devuelto",
-          f_devolucion: serverTimestamp(),
-          guia_devolucion: guiaId,
-          usuario: datosDevolucion.usuario,
-        },
-        { merge: true }
-      );
-      toast.success(`♻️ Bobina ${datosDevolucion.drump} marcada como *devuelto* (0 m).`);
-    } else {
-      batch.set(
-        drRef,
-        {
-          metros: metrosRestantes,
-          actualizadoPor: datosDevolucion.usuario,
-          actualizadoEn: serverTimestamp(),
-          guia_devolucion: guiaId,
-        },
-        { merge: true }
-      );
-      toast.success(`✅ Bobina actualizada: ${metrosRestantes} m restantes.`);
-    }
+  // Modo “por metros”
+  const mDev = Number(datosDevolucion.metraje) || 0;
+  if (mDev > Number(datosBobina.metros || 0)) {
+    toast.error(`❌ No puedes devolver más de ${datosBobina.metros} metros.`);
+    throw new Error("Metros inválidos");
+  }
 
-    // Sumar metros devueltos al almacén
+  const metrosRestantes = Number(datosBobina.metros || 0) - mDev;
+
+  if (metrosRestantes <= 0) {
+    batch.set(
+      drRef,
+      {
+        metros: 0,
+        estado: "devuelto",
+        f_devolucion: serverTimestamp(),
+        guia_devolucion: guiaId,
+        usuario: datosDevolucion.usuario,
+      },
+      { merge: true }
+    );
+    toast.success(`♻️ Bobina ${datosDevolucion.drump} marcada como *devuelto* (0 m).`);
+  } else {
+    batch.set(
+      drRef,
+      {
+        metros: metrosRestantes,
+        actualizadoPor: datosDevolucion.usuario,
+        actualizadoEn: serverTimestamp(),
+        guia_devolucion: guiaId,
+      },
+      { merge: true }
+    );
+    toast.success(`✅ Bobina actualizada: ${metrosRestantes} m restantes.`);
+  }
+
+  // Sumar metros devueltos al almacén (solo en modo “por metros”)
+  if (mDev > 0) {
     const bobinaAlmacenRef = doc(db, "materiales_stock", "bobina");
     const snapAlm = await getDoc(bobinaAlmacenRef);
     const actual = snapAlm.exists() ? Number(snapAlm.data().cantidad || 0) : 0;
@@ -525,13 +559,15 @@ export default function Devolucion() {
       bobinaAlmacenRef,
       {
         nombre: "bobina",
-        cantidad: actual + (Number(datosDevolucion.metraje) || 0),
+        cantidad: actual + mDev,
         actualizadoPor: datosDevolucion.usuario,
         actualizadoEn: serverTimestamp(),
       },
       { merge: true }
     );
-  };
+  }
+};
+
 
   /* ======= Registrar Devolución ======= */
   const handleRegistrarDevolucion = async () => {
@@ -553,16 +589,23 @@ export default function Devolucion() {
       const guiaId = await generarNumeroGuia();
       setUltimaGuia(guiaId);
 
-      const hayEquipos = datosDevolucion.equipos.length > 0;
-      const hayMats = Object.values(materialesDevueltos).some((v) => Number(v) > 0);
-      const hayMetros = Number(datosDevolucion.metraje) > 0;
+      // Devolución completa de bobina residencial sin metros
+const forceCierreBobina =
+  datosDevolucion.tipo === "Residencial" &&
+  !!datosDevolucion.drump?.trim() &&
+  (Number(datosDevolucion.metraje) || 0) === 0;
 
-      if (!hayEquipos && !hayMats && !hayMetros) {
-        toast.error("⚠️ Debes devolver al menos un equipo, material o bobina.");
-        setProcesando(false);
-        toast.dismiss(toastId);
-        return;
-      }
+      const hayEquipos = datosDevolucion.equipos.length > 0;
+const hayMats = Object.values(materialesDevueltos).some((v) => Number(v) > 0);
+const hayMetros = Number(datosDevolucion.metraje) > 0;
+
+if (!hayEquipos && !hayMats && !hayMetros && !forceCierreBobina) {
+  toast.error("⚠️ Debes devolver al menos un equipo, material, metros de bobina o una bobina completa (DRUMP).");
+  setProcesando(false);
+  toast.dismiss(toastId);
+  return;
+}
+
 
       // 1) Equipos -> a almacén + guia_devolucion
       for (const eq of datosDevolucion.equipos) {
@@ -620,9 +663,10 @@ export default function Devolucion() {
       }
 
       // 3) DRUMP / Metros
-      if (datosDevolucion.tipo === "Residencial" && datosDevolucion.drump && Number(datosDevolucion.metraje) > 0) {
-        await procesarDevolucionBobinaResidencial(batch, guiaId); // ✅ pasa guiaId
-      }
+      if (datosDevolucion.tipo === "Residencial" && datosDevolucion.drump && (hayMetros || forceCierreBobina)) {
+  await procesarDevolucionBobinaResidencial(batch, guiaId, { forceCierre: forceCierreBobina });
+}
+
 
       if (datosDevolucion.tipo === "Condominio" && Number(datosDevolucion.metraje) > 0) {
         const metros = Number(datosDevolucion.metraje) || 0;
@@ -662,13 +706,15 @@ export default function Devolucion() {
 
       // 4) Guardar guía
       const datosFinal = {
-        ...datosDevolucion,
-        guiaId,
-        materiales: materialesDevueltos,
-        tecnicosUID: tecnicos,
-        f_registro: serverTimestamp(),
-      };
-      await addDoc(collection(db, "guias_devolucion"), datosFinal);
+  ...datosDevolucion,
+  guiaId,
+  materiales: materialesDevueltos,
+  tecnicosUID: tecnicos,
+  f_registro: serverTimestamp(),
+  bobinaCompletaDevuelta: forceCierreBobina || false,
+};
+await addDoc(collection(db, "guias_devolucion"), datosFinal);
+
 
       // 5) PDF + Notificación
       const urlComprobante = await generarPDFDevolucion(guiaId, datosFinal);
@@ -690,6 +736,7 @@ export default function Devolucion() {
           equipos: datosFinal.equipos,
           materiales: datosFinal.materiales,
           drump: datosFinal.drump || "",
+          
           metraje: datosFinal.metraje || 0,
         },
         visto: false,
@@ -731,12 +778,25 @@ export default function Devolucion() {
   };
 
   /* ======= Computados para previsualización ======= */
-  const totalMateriales = Object.values(materialesDevueltos || {}).reduce(
-    (a, b) => a + (Number(b) || 0), 0
+  // Computados para previsualización
+const totalMateriales = Object.values(materialesDevueltos || {}).reduce(
+  (a, b) => a + (Number(b) || 0), 0
+);
+
+// Permite previsualizar si:
+// - hay equipos, o
+// - hay materiales, o
+// - hay metraje > 0, o
+// - hay DRUMP residencial (aunque metraje sea 0)
+const puedePrevisualizar =
+  !!datosDevolucion.cuadrillaId &&
+  (
+    listaEquipos.length > 0 ||
+    totalMateriales > 0 ||
+    Number(datosDevolucion.metraje) > 0 ||
+    (datosDevolucion.tipo === "Residencial" && !!datosDevolucion.drump?.trim())
   );
-  const puedePrevisualizar =
-    !!datosDevolucion.cuadrillaId &&
-    (listaEquipos.length > 0 || totalMateriales > 0 || Number(datosDevolucion.metraje) > 0);
+
 
   /* =======================
      UI
