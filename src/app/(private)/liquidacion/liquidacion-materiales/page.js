@@ -8,16 +8,13 @@ import {
   doc,
   runTransaction,
   serverTimestamp,
-  query,
-  where,
+  updateDoc,
 } from "firebase/firestore";
 import dayjs from "dayjs";
 import customParseFormat from "dayjs/plugin/customParseFormat";
 import "dayjs/locale/es";
 import toast from "react-hot-toast";
-import { useAuth } from "@/app/context/AuthContext"; // ajusta la ruta si difiere
-import { Input } from "@/app/components/ui/input"; // tu input tailwind/shadcn
-// Si no tienes Input, reemplaza por <input ... className="..." />
+import { useAuth } from "@/app/context/AuthContext"; // ajusta si tu ruta difiere
 
 dayjs.extend(customParseFormat);
 dayjs.locale("es");
@@ -42,22 +39,50 @@ const convFecha = (valor) => {
 };
 const fmt = (d) => (d ? dayjs(d).format("DD/MM/YYYY") : "-");
 
+// Normaliza string para filtros (sin tildes, minúsculas)
+const norm = (s) =>
+  (s || "")
+    .toString()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+
+const esResidencial = (row) =>
+  (row.residencialCondominio || "")
+    .toString()
+    .trim()
+    .toUpperCase() === "RESIDENCIAL";
+
+// ¿ya tiene datos de liquidación?
+const tieneDatosLiq = (row) => {
+  const a = (row.acta || "").trim();
+  const r = (row.rotuloNapCto || "").trim();
+  const m = Number.isFinite(row.metraje_instalado) ? row.metraje_instalado : 0;
+  const t = Number.isFinite(row.templadores) ? row.templadores : 0;
+  const h = Number.isFinite(row.hebillas) ? row.hebillas : 0;
+  const c = Number.isFinite(row.clevis) ? row.clevis : 0;
+  // Si es residencial, consideramos también T/H/C
+  if (esResidencial(row)) return !!(a || r || m || t || h || c);
+  // Si no, con ACTA/ROTULO/METROS basta
+  return !!(a || r || m);
+};
+
 /* =========================
    Página
 ========================= */
 export default function LiquidacionMaterialesPage() {
-  const { userData } = useAuth(); // { uid, displayName, role, ... }
+  const { userData } = useAuth(); // { uid, displayName, email, ... }
+
   const [cargando, setCargando] = useState(false);
   const [insts, setInsts] = useState([]);
-  const [cuadrillasIdx, setCuadrillasIdx] = useState({}); // nombre -> {id, categoria, r_c, ...}
+  const [cuadrillasIdx, setCuadrillasIdx] = useState({}); // nombre -> { id, r_c/categoria }
 
-  // filtros
+  // filtros (sin R/C)
   const [filtros, setFiltros] = useState({
     mes: dayjs().format("YYYY-MM"),
     dia: "",
     cuadrilla: "",
-    busqueda: "", // código o cliente
-    rc: "", // RESIDENCIAL / CONDOMINIO
+    busqueda: "",
   });
 
   // Edición / liquidación por fila
@@ -67,6 +92,12 @@ export default function LiquidacionMaterialesPage() {
   // Focus para escanear ACTA directo
   const scanRef = useRef(null);
 
+  const obtenerInsts = async () => {
+    const snap = await getDocs(collection(db, "liquidacion_instalaciones"));
+    const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    setInsts(data);
+  };
+
   /* =========================
      Cargar base
   ========================= */
@@ -74,12 +105,10 @@ export default function LiquidacionMaterialesPage() {
     (async () => {
       try {
         setCargando(true);
-        // 1) instalaciones candidatas
-        const snap = await getDocs(collection(db, "liquidacion_instalaciones"));
-        const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-        setInsts(data);
+        // 1) instalaciones
+        await obtenerInsts();
 
-        // 2) índice de cuadrillas (por nombre)
+        // 2) índice de cuadrillas (por campo "nombre")
         const snapC = await getDocs(collection(db, "cuadrillas"));
         const idx = {};
         snapC.docs.forEach((d) => {
@@ -88,7 +117,7 @@ export default function LiquidacionMaterialesPage() {
           if (nombre) {
             idx[nombre] = {
               id: d.id,
-              categoria: v?.categoria || v?.r_c || v?.tipo || "", // "Residencial" / "Condominio"
+              categoria: v?.categoria || v?.r_c || v?.tipo || "", // opcional
               r_c: v?.r_c || "",
             };
           }
@@ -109,23 +138,27 @@ export default function LiquidacionMaterialesPage() {
   const instsFiltradas = useMemo(() => {
     const mes = filtros.mes;
     const dia = filtros.dia;
-    const q = (filtros.busqueda || "").toLowerCase().trim();
-    const cuadrilla = (filtros.cuadrilla || "").trim();
-    const rc = (filtros.rc || "").trim().toUpperCase();
+    const q = norm(filtros.busqueda);
+    const cuad = norm(filtros.cuadrilla);
 
     return insts.filter((l) => {
       const f = convFecha(l.fechaInstalacion);
       if (!f) return false;
+
       const okMes = dayjs(f).format("YYYY-MM") === mes;
       const okDia = dia ? dayjs(f).format("YYYY-MM-DD") === dia : true;
-      const okCuad = cuadrilla ? (l.cuadrillaNombre || "") === cuadrilla : true;
-      const okRC = rc ? (l.residencialCondominio || "").toUpperCase() === rc : true;
-      const okQ = q
-        ? ((l.codigoCliente || "") + (l.cliente || "") + (l.cuadrillaNombre || ""))
-            .toLowerCase()
-            .includes(q)
-        : true;
-      return okMes && okDia && okCuad && okRC && okQ;
+
+      // cuadrilla: "contiene" y case-insensitive
+      const lCuad = norm(l.cuadrillaNombre);
+      const okCuad = cuad ? lCuad.includes(cuad) : true;
+
+      // búsqueda por código, cliente o cuadrilla (contiene)
+      const hay = norm(
+        `${l.codigoCliente || ""} ${l.cliente || ""} ${l.cuadrillaNombre || ""}`
+      );
+      const okQ = q ? hay.includes(q) : true;
+
+      return okMes && okDia && okCuad && okQ;
     });
   }, [insts, filtros]);
 
@@ -141,13 +174,14 @@ export default function LiquidacionMaterialesPage() {
     setFormFila((p) => ({
       ...p,
       [rowId]: {
+        // defaults
         acta: "",
         rotulo: "",
         metraje: "",
         templadores: "",
         hebillas: "",
-        cinta_bandi: "",
         clevis: "",
+        // override
         ...p[rowId],
         [campo]: valor,
       },
@@ -155,26 +189,38 @@ export default function LiquidacionMaterialesPage() {
   };
 
   /* =========================
-     Transacción de guardado
+     Transacción de guardado (actualiza el doc de instalaciones)
   ========================= */
   const guardarLiquidacion = async (row) => {
     const f = formFila[row.id] || {};
-    // Validaciones mínimas
-    const acta = String(f.acta || "").trim();
-    const rotulo = String(f.rotulo || "").trim();
-    const metraje = Math.max(0, toFloat(f.metraje));
-    const templadores = Math.max(0, toInt(f.templadores));
-    const hebillas = Math.max(0, toInt(f.hebillas));
-    const cinta_bandi = Math.max(0, toInt(f.cinta_bandi));
-    const clevis = Math.max(0, toInt(f.clevis));
+
+    // Tomar "existente o nuevo" para que al actualizar no borre campos si se dejan vacíos accidentalmente
+    const actaInput = (f.acta ?? "").toString().trim();
+    const rotuloInput = (f.rotulo ?? "").toString().trim();
+    const metrajeInput = f.metraje ?? "";
+    const templInput = f.templadores ?? "";
+    const hebiInput = f.hebillas ?? "";
+    const clevInput = f.clevis ?? "";
+
+    const acta = actaInput || (row.acta || "");
+    const rotulo = rotuloInput || (row.rotuloNapCto || "");
+    const metraje = Math.max(0, toFloat(metrajeInput !== "" ? metrajeInput : row.metraje_instalado));
+
+    const soloRes = esResidencial(row);
+    const templadoresRaw = soloRes ? (templInput !== "" ? templInput : row.templadores) : 0;
+    const hebillasRaw = soloRes ? (hebiInput !== "" ? hebiInput : row.hebillas) : 0;
+    const clevisRaw = soloRes ? (clevInput !== "" ? clevInput : row.clevis) : 0;
+
+    const templadores = Math.max(0, toInt(templadoresRaw));
+    const hebillas = Math.max(0, toInt(hebillasRaw));
+    const clevis = Math.max(0, toInt(clevisRaw));
 
     if (!acta) return toast.error("Ingresa/scanea el Nº de ACTA.");
     if (!rotulo) return toast.error("Ingresa el rótulo NAP/CTO.");
-    if (metraje <= 0 && templadores + hebillas + cinta_bandi + clevis <= 0) {
+    if (metraje <= 0 && templadores + hebillas + clevis <= 0) {
       return toast.error("No hay cantidades para liquidar.");
     }
 
-    // Resolver cuadrilla
     const cuadrillaNombre = row.cuadrillaNombre || "";
     const cuadrillaInfo = cuadrillasIdx[cuadrillaNombre];
     if (!cuadrillaInfo?.id) {
@@ -185,114 +231,92 @@ export default function LiquidacionMaterialesPage() {
     setGuardandoId(row.id);
     try {
       await runTransaction(db, async (tx) => {
-        // a) leer stock actual por material que descontaremos
-        const matRefs = {
-          bobina: doc(db, "cuadrillas", cuadId, "stock_materiales", "bobina"),
-          templadores: doc(db, "cuadrillas", cuadId, "stock_materiales", "templadores"),
-          hebillas: doc(db, "cuadrillas", cuadId, "stock_materiales", "hebillas"),
-          cinta_bandi: doc(db, "cuadrillas", cuadId, "stock_materiales", "cinta_bandi"),
-          clevis: doc(db, "cuadrillas", cuadId, "stock_materiales", "clevis"),
-        };
+        // Refs de stock
+        const refBob = doc(db, "cuadrillas", cuadId, "stock_materiales", "bobina");
 
-        const toRead = [];
-        if (metraje > 0) toRead.push(matRefs.bobina);
-        if (templadores > 0) toRead.push(matRefs.templadores);
-        if (hebillas > 0) toRead.push(matRefs.hebillas);
-        if (cinta_bandi > 0) toRead.push(matRefs.cinta_bandi);
-        if (clevis > 0) toRead.push(matRefs.clevis);
+        const refsOpt = [];
+        if (metraje > 0) refsOpt.push(refBob);
 
-        const snaps = await Promise.all(toRead.map((r) => tx.get(r)));
-        // mapa ref->cantidadActual
-        const cant = {};
-        snaps.forEach((s) => {
-          cant[s.ref.id] = toFloat(s.data()?.cantidad || 0);
-        });
-
-        // b) validar stock suficiente (no ir a negativo)
-        const falta = [];
-
-        if (metraje > 0) {
-          const actual = cant["bobina"] ?? 0;
-          if (actual - metraje < 0) falta.push(`bobina (tienes ${actual} m, pides ${metraje} m)`);
+        if (soloRes) {
+          const rTem = doc(db, "cuadrillas", cuadId, "stock_materiales", "templadores");
+          const rHeb = doc(db, "cuadrillas", cuadId, "stock_materiales", "hebillas");
+          const rCle = doc(db, "cuadrillas", cuadId, "stock_materiales", "clevis");
+          if (templadores > 0) refsOpt.push(rTem);
+          if (hebillas > 0) refsOpt.push(rHeb);
+          if (clevis > 0) refsOpt.push(rCle);
         }
-        for (const [key, val] of [
-          ["templadores", templadores],
-          ["hebillas", hebillas],
-          ["cinta_bandi", cinta_bandi],
-          ["clevis", clevis],
-        ]) {
-          if (val > 0) {
-            const actual = cant[key] ?? 0;
-            if (actual - val < 0) falta.push(`${key} (tienes ${actual}, pides ${val})`);
+
+        // Leer cantidades actuales
+        const snaps = await Promise.all(refsOpt.map((r) => tx.get(r)));
+        const getCant = (id) => toFloat(snaps.find((s) => s.ref.id === id)?.data()?.cantidad || 0);
+
+        // Validar no negativo
+        const faltas = [];
+        if (metraje > 0) {
+          const cur = getCant("bobina");
+          if (cur - metraje < 0) faltas.push(`bobina (tienes ${cur} m, pides ${metraje} m)`);
+        }
+        if (soloRes) {
+          if (templadores > 0) {
+            const cur = getCant("templadores");
+            if (cur - templadores < 0) faltas.push(`templadores (tienes ${cur}, pides ${templadores})`);
+          }
+          if (hebillas > 0) {
+            const cur = getCant("hebillas");
+            if (cur - hebillas < 0) faltas.push(`hebillas (tienes ${cur}, pides ${hebillas})`);
+          }
+          if (clevis > 0) {
+            const cur = getCant("clevis");
+            if (cur - clevis < 0) faltas.push(`clevis (tienes ${cur}, pides ${clevis})`);
           }
         }
 
-        if (falta.length) {
-          throw new Error(
-            "Stock insuficiente: " + falta.join(" | ")
-          );
-        }
+        if (faltas.length) throw new Error("Stock insuficiente: " + faltas.join(" | "));
 
-        // c) descuentos
+        // Descuentos de stock
+        const marca = {
+          actualizadoEn: serverTimestamp(),
+          actualizadoPor: userData?.displayName || userData?.email || "Sistema",
+        };
         if (metraje > 0) {
-          const sBob = snaps.find((s) => s?.ref?.id === "bobina");
-          const cur = toFloat(sBob?.data()?.cantidad || 0);
-          tx.update(matRefs.bobina, { cantidad: cur - metraje, actualizadoEn: serverTimestamp(), actualizadoPor: userData?.displayName || userData?.email || "Sistema" });
+          const cur = getCant("bobina");
+          tx.update(refBob, { cantidad: cur - metraje, ...marca });
         }
-        if (templadores > 0) {
-          const s = snaps.find((x) => x?.ref?.id === "templadores");
-          const cur = toFloat(s?.data()?.cantidad || 0);
-          tx.update(matRefs.templadores, { cantidad: cur - templadores, actualizadoEn: serverTimestamp(), actualizadoPor: userData?.displayName || userData?.email || "Sistema" });
-        }
-        if (hebillas > 0) {
-          const s = snaps.find((x) => x?.ref?.id === "hebillas");
-          const cur = toFloat(s?.data()?.cantidad || 0);
-          tx.update(matRefs.hebillas, { cantidad: cur - hebillas, actualizadoEn: serverTimestamp(), actualizadoPor: userData?.displayName || userData?.email || "Sistema" });
-        }
-        if (cinta_bandi > 0) {
-          const s = snaps.find((x) => x?.ref?.id === "cinta_bandi");
-          const cur = toFloat(s?.data()?.cantidad || 0);
-          tx.update(matRefs.cinta_bandi, { cantidad: cur - cinta_bandi, actualizadoEn: serverTimestamp(), actualizadoPor: userData?.displayName || userData?.email || "Sistema" });
-        }
-        if (clevis > 0) {
-          const s = snaps.find((x) => x?.ref?.id === "clevis");
-          const cur = toFloat(s?.data()?.cantidad || 0);
-          tx.update(matRefs.clevis, { cantidad: cur - clevis, actualizadoEn: serverTimestamp(), actualizadoPor: userData?.displayName || userData?.email || "Sistema" });
+        if (soloRes) {
+          if (templadores > 0) {
+            const r = doc(db, "cuadrillas", cuadId, "stock_materiales", "templadores");
+            const cur = getCant("templadores");
+            tx.update(r, { cantidad: cur - templadores, ...marca });
+          }
+          if (hebillas > 0) {
+            const r = doc(db, "cuadrillas", cuadId, "stock_materiales", "hebillas");
+            const cur = getCant("hebillas");
+            tx.update(r, { cantidad: cur - hebillas, ...marca });
+          }
+          if (clevis > 0) {
+            const r = doc(db, "cuadrillas", cuadId, "stock_materiales", "clevis");
+            const cur = getCant("clevis");
+            tx.update(r, { cantidad: cur - clevis, ...marca });
+          }
         }
 
-        // d) registrar liquidación (colección central)
-        const regRef = doc(collection(db, "liquidacion_materiales"));
-        tx.set(regRef, {
-          createdAt: serverTimestamp(),
-          createdBy: userData?.displayName || userData?.email || "Sistema",
-          userId: userData?.uid || null,
-
-          // vínculo instalación básica
-          instalacionId: row.id,
-          fechaInstalacion: row.fechaInstalacion || null,
-          codigoCliente: row.codigoCliente || "",
-          cliente: row.cliente || "",
-          cuadrillaNombre: cuadrillaNombre,
-          cuadrillaId: cuadId,
-          rc: row.residencialCondominio || cuadrillaInfo?.r_c || "",
-          snONT: row.snONT || null,
-          snMESH: Array.isArray(row.snMESH) ? row.snMESH.filter(Boolean) : [],
-          snBOX: Array.isArray(row.snBOX) ? row.snBOX.filter(Boolean) : [],
-          snFONO: row.snFONO || null,
-
-          // captura de liquidación
-          acta,
-          rotulo,
-          metraje, // metros descontados
-          templadores,
-          hebillas,
-          cinta_bandi,
-          clevis,
+        // 👉 Actualizar la instalación existente, agregando o sobreescribiendo SOLO estos campos
+        const instRef = doc(db, "liquidacion_instalaciones", row.id);
+        tx.update(instRef, {
+          acta,                        // "005-0024274"
+          rotuloNapCto: rotulo,        // texto
+          metraje_instalado: metraje,  // número (m)
+          templadores: soloRes ? templadores : 0,
+          hebillas: soloRes ? hebillas : 0,
+          clevis: soloRes ? clevis : 0,
+          materiales_liq_por: userData?.displayName || userData?.email || "Sistema",
+          materiales_liq_en: serverTimestamp(),
         });
       });
 
-      toast.success("✅ Liquidación realizada y stock actualizado.");
-      // limpiar mini-formulario de la fila
+      toast.success(tieneDatosLiq(row) ? "✅ Liquidación actualizada." : "✅ Liquidación registrada.");
+      // refrescar datos para ver chips/estado
+      await obtenerInsts();
       setFormFila((p) => {
         const cp = { ...p };
         delete cp[row.id];
@@ -322,51 +346,57 @@ export default function LiquidacionMaterialesPage() {
         </button>
       </div>
 
-      {/* Filtros */}
+      {/* Filtros (sin R/C) */}
       <div className="mb-4 grid gap-3 md:grid-cols-2 lg:grid-cols-4">
         <div className="flex flex-col">
           <label className="text-sm font-medium text-gray-700">Mes</label>
-          <Input type="month" name="mes" value={filtros.mes} onChange={onChangeFiltro} />
-        </div>
-
-        <div className="flex flex-col">
-          <label className="text-sm font-medium text-gray-700">Día</label>
-          <Input type="date" name="dia" value={filtros.dia} onChange={onChangeFiltro} />
-        </div>
-
-        <div className="flex flex-col">
-          <label className="text-sm font-medium text-gray-700">Cuadrilla</label>
-          <Input
-            type="text"
-            name="cuadrilla"
-            placeholder="K11 RESIDENCIAL…"
-            value={filtros.cuadrilla}
+          <input
+            type="month"
+            name="mes"
+            value={filtros.mes}
             onChange={onChangeFiltro}
+            className="border px-2 py-1 rounded"
           />
         </div>
 
         <div className="flex flex-col">
-          <label className="text-sm font-medium text-gray-700">R/C</label>
-          <select
-            name="rc"
-            value={filtros.rc}
+          <label className="text-sm font-medium text-gray-700">Día</label>
+          <input
+            type="date"
+            name="dia"
+            value={filtros.dia}
             onChange={onChangeFiltro}
             className="border px-2 py-1 rounded"
-          >
-            <option value="">Todos</option>
-            <option value="RESIDENCIAL">Residencial</option>
-            <option value="CONDOMINIO">Condominio</option>
-          </select>
+          />
         </div>
 
-        <div className="md:col-span-2">
+        <div className="flex flex-col">
+          <label className="text-sm font-medium text-gray-700">Cuadrilla</label>
+          <input
+            list="lista-cuadrillas"
+            type="text"
+            name="cuadrilla"
+            placeholder="Escribe o elige…"
+            value={filtros.cuadrilla}
+            onChange={onChangeFiltro}
+            className="border px-2 py-1 rounded"
+          />
+          <datalist id="lista-cuadrillas">
+            {Object.keys(cuadrillasIdx).sort().map((n) => (
+              <option key={n} value={n} />
+            ))}
+          </datalist>
+        </div>
+
+        <div className="flex flex-col md:col-span-1">
           <label className="text-sm font-medium text-gray-700">Código o Cliente</label>
-          <Input
+          <input
             type="text"
             name="busqueda"
             placeholder="Buscar por código o cliente…"
             value={filtros.busqueda}
             onChange={onChangeFiltro}
+            className="border px-2 py-1 rounded"
           />
         </div>
       </div>
@@ -376,6 +406,7 @@ export default function LiquidacionMaterialesPage() {
         <table className="min-w-full text-sm">
           <thead className="bg-gray-100 sticky top-0 z-10">
             <tr className="text-center text-gray-700 font-semibold">
+              <th className="p-2 border w-32">Estado</th>
               <th className="p-2 border w-36">Fecha</th>
               <th className="p-2 border w-48">Cuadrilla</th>
               <th className="p-2 border w-28">Código</th>
@@ -384,19 +415,17 @@ export default function LiquidacionMaterialesPage() {
               <th className="p-2 border w-60">SN MESH</th>
               <th className="p-2 border w-60">SN BOX</th>
               <th className="p-2 border w-40">SN FONO</th>
-              <th className="p-2 border min-w-[520px]">Liquidar</th>
+              <th className="p-2 border min-w-[620px]">Liquidar / Datos existentes</th>
             </tr>
           </thead>
           <tbody>
             {cargando ? (
               <tr>
-                <td colSpan={9} className="p-6 text-center text-gray-500">Cargando…</td>
+                <td colSpan={10} className="p-6 text-center text-gray-500">Cargando…</td>
               </tr>
             ) : instsFiltradas.length === 0 ? (
               <tr>
-                <td colSpan={9} className="p-6 text-center text-gray-500">
-                  No hay registros con los filtros actuales.
-                </td>
+                <td colSpan={10} className="p-6 text-center text-gray-500">No hay registros con los filtros actuales.</td>
               </tr>
             ) : (
               instsFiltradas.map((l) => {
@@ -406,8 +435,33 @@ export default function LiquidacionMaterialesPage() {
                 const box = Array.isArray(l.snBOX) ? l.snBOX.filter(Boolean) : [];
                 const saving = guardandoId === l.id;
 
+                const ya = tieneDatosLiq(l);
+                const estadoCls = ya
+                  ? "bg-green-100 text-green-800 border-green-300"
+                  : "bg-amber-100 text-amber-800 border-amber-300";
+
+                // valores existentes para mostrar chips
+                const actaExist = (l.acta || "").trim();
+                const rotuloExist = (l.rotuloNapCto || "").trim();
+                const metrajeExist = Number.isFinite(l.metraje_instalado) ? l.metraje_instalado : null;
+                const templExist = Number.isFinite(l.templadores) ? l.templadores : null;
+                const hebiExist = Number.isFinite(l.hebillas) ? l.hebillas : null;
+                const clevExist = Number.isFinite(l.clevis) ? l.clevis : null;
+
                 return (
-                  <tr key={l.id} className="hover:bg-gray-50">
+                  <tr key={l.id} className="hover:bg-gray-50 align-top">
+                    {/* Estado */}
+                    <td className="border p-2 text-center">
+                      <span className={`inline-block px-2 py-0.5 rounded-full text-xs border ${estadoCls}`}>
+                        {ya ? "✅ Liquidado" : "🟠 Pendiente"}
+                      </span>
+                      {l.materiales_liq_en && (
+                        <div className="mt-1 text-[11px] text-gray-500">
+                          {`Último: ${fmt(convFecha(l.materiales_liq_en))}`}
+                        </div>
+                      )}
+                    </td>
+
                     <td className="border p-2 text-center">{fmt(f)}</td>
                     <td className="border p-2 text-center">{l.cuadrillaNombre || "-"}</td>
                     <td className="border p-2 text-center">{l.codigoCliente || "-"}</td>
@@ -437,78 +491,195 @@ export default function LiquidacionMaterialesPage() {
                     </td>
                     <td className="border p-2 text-center">{l.snFONO || "-"}</td>
 
-                    {/* Bloque de liquidación */}
+                    {/* Bloque de liquidación + datos existentes */}
                     <td className="border p-2">
+                      {/* Chips de datos existentes */}
+                      <div className="mb-2 flex flex-wrap gap-1.5">
+                        {actaExist ? (
+                          <span className="px-2 py-0.5 rounded-full text-xs bg-slate-100 border text-slate-700">ACTA: {actaExist}</span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded-full text-xs bg-rose-50 border border-rose-200 text-rose-700">ACTA: —</span>
+                        )}
+                        {rotuloExist ? (
+                          <span className="px-2 py-0.5 rounded-full text-xs bg-slate-100 border text-slate-700">Rótulo: {rotuloExist}</span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded-full text-xs bg-rose-50 border border-rose-200 text-rose-700">Rótulo: —</span>
+                        )}
+                        {typeof metrajeExist === "number" ? (
+                          <span className="px-2 py-0.5 rounded-full text-xs bg-slate-100 border text-slate-700">Metros: {metrajeExist}</span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded-full text-xs bg-rose-50 border border-rose-200 text-rose-700">Metros: —</span>
+                        )}
+
+                        {esResidencial(l) && (
+                          <>
+                            {typeof templExist === "number" ? (
+                              <span className="px-2 py-0.5 rounded-full text-xs bg-green-50 border border-green-200 text-green-800">Templadores: {templExist}</span>
+                            ) : (
+                              <span className="px-2 py-0.5 rounded-full text-xs bg-rose-50 border border-rose-200 text-rose-700">Templadores: —</span>
+                            )}
+                            {typeof hebiExist === "number" ? (
+                              <span className="px-2 py-0.5 rounded-full text-xs bg-green-50 border border-green-200 text-green-800">Hebillas: {hebiExist}</span>
+                            ) : (
+                              <span className="px-2 py-0.5 rounded-full text-xs bg-rose-50 border border-rose-200 text-rose-700">Hebillas: —</span>
+                            )}
+                            {typeof clevExist === "number" ? (
+                              <span className="px-2 py-0.5 rounded-full text-xs bg-green-50 border border-green-200 text-green-800">Clevis: {clevExist}</span>
+                            ) : (
+                              <span className="px-2 py-0.5 rounded-full text-xs bg-rose-50 border border-rose-200 text-rose-700">Clevis: —</span>
+                            )}
+                          </>
+                        )}
+                      </div>
+
+                      {/* Formulario de liquidación / actualización */}
                       <div className="grid gap-2 md:grid-cols-6">
+                        {/* ACTA con autoguionado; precarga desde doc si no hay edición */}
                         <input
                           ref={scanRef}
                           type="text"
                           inputMode="numeric"
                           placeholder="Nº ACTA (scan)"
-                          className="border rounded px-2 py-1"
-                          value={v.acta || ""}
-                          onChange={(e) => setField(l.id, "acta", e.target.value)}
+                          className={cls(
+                            "border rounded px-2 py-1",
+                            (l.acta && !v.acta) || (v.acta && v.acta.trim() !== "")
+                              ? "border-green-400"
+                              : ""
+                          )}
+                          value={v.acta ?? l.acta ?? ""}
+                          onChange={(e) => {
+                            const raw = e.target.value;
+                            const soloDig = raw.replace(/[^\d]/g, "");
+                            const form =
+                              soloDig.length <= 3
+                                ? soloDig
+                                : `${soloDig.slice(0, 3)}-${soloDig.slice(3)}`;
+                            setField(l.id, "acta", form);
+                          }}
                         />
+
                         <input
                           type="text"
                           placeholder="Rótulo NAP/CTO"
-                          className="border rounded px-2 py-1"
-                          value={v.rotulo || ""}
+                          className={cls(
+                            "border rounded px-2 py-1",
+                            (l.rotuloNapCto && !v.rotulo) || (v.rotulo && v.rotulo.trim() !== "")
+                              ? "border-green-400"
+                              : ""
+                          )}
+                          value={v.rotulo ?? l.rotuloNapCto ?? ""}
                           onChange={(e) => setField(l.id, "rotulo", e.target.value)}
                         />
+
                         <input
                           type="number"
                           min={0}
                           step="0.01"
                           placeholder="Metros"
-                          className="border rounded px-2 py-1"
-                          value={v.metraje ?? ""}
+                          className={cls(
+                            "border rounded px-2 py-1",
+                            (typeof l.metraje_instalado === "number" && v.metraje === undefined) ||
+                              (v.metraje !== undefined && String(v.metraje).trim() !== "")
+                              ? "border-green-400"
+                              : ""
+                          )}
+                          value={
+                            v.metraje !== undefined
+                              ? v.metraje
+                              : (typeof l.metraje_instalado === "number" ? l.metraje_instalado : "")
+                          }
                           onChange={(e) => setField(l.id, "metraje", e.target.value)}
                           title="Metraje instalado (descuenta bobina)"
                         />
-                        <input
-                          type="number"
-                          min={0}
-                          placeholder="Templadores"
-                          className="border rounded px-2 py-1"
-                          value={v.templadores ?? ""}
-                          onChange={(e) => setField(l.id, "templadores", e.target.value)}
-                        />
-                        <input
-                          type="number"
-                          min={0}
-                          placeholder="Hebillas"
-                          className="border rounded px-2 py-1"
-                          value={v.hebillas ?? ""}
-                          onChange={(e) => setField(l.id, "hebillas", e.target.value)}
-                        />
-                        <input
-                          type="number"
-                          min={0}
-                          placeholder="Cinta bandi"
-                          className="border rounded px-2 py-1"
-                          value={v.cinta_bandi ?? ""}
-                          onChange={(e) => setField(l.id, "cinta_bandi", e.target.value)}
-                        />
-                        <input
-                          type="number"
-                          min={0}
-                          placeholder="Clevis"
-                          className="border rounded px-2 py-1"
-                          value={v.clevis ?? ""}
-                          onChange={(e) => setField(l.id, "clevis", e.target.value)}
-                        />
 
-                        <div className="md:col-span-6 flex justify-end">
+                        {/* Solo para RESIDENCIAL */}
+                        {esResidencial(l) && (
+                          <>
+                            <input
+                              type="number"
+                              min={0}
+                              placeholder="Templadores"
+                              className={cls(
+                                "border rounded px-2 py-1",
+                                (typeof l.templadores === "number" && v.templadores === undefined) ||
+                                  (v.templadores !== undefined && String(v.templadores).trim() !== "")
+                                  ? "border-green-400"
+                                  : ""
+                              )}
+                              value={
+                                v.templadores !== undefined
+                                  ? v.templadores
+                                  : (typeof l.templadores === "number" ? l.templadores : "")
+                              }
+                              onChange={(e) => setField(l.id, "templadores", e.target.value)}
+                            />
+                            <input
+                              type="number"
+                              min={0}
+                              placeholder="Hebillas"
+                              className={cls(
+                                "border rounded px-2 py-1",
+                                (typeof l.hebillas === "number" && v.hebillas === undefined) ||
+                                  (v.hebillas !== undefined && String(v.hebillas).trim() !== "")
+                                  ? "border-green-400"
+                                  : ""
+                              )}
+                              value={
+                                v.hebillas !== undefined
+                                  ? v.hebillas
+                                  : (typeof l.hebillas === "number" ? l.hebillas : "")
+                              }
+                              onChange={(e) => setField(l.id, "hebillas", e.target.value)}
+                            />
+                            <input
+                              type="number"
+                              min={0}
+                              placeholder="Clevis"
+                              className={cls(
+                                "border rounded px-2 py-1",
+                                (typeof l.clevis === "number" && v.clevis === undefined) ||
+                                  (v.clevis !== undefined && String(v.clevis).trim() !== "")
+                                  ? "border-green-400"
+                                  : ""
+                              )}
+                              value={
+                                v.clevis !== undefined
+                                  ? v.clevis
+                                  : (typeof l.clevis === "number" ? l.clevis : "")
+                              }
+                              onChange={(e) => setField(l.id, "clevis", e.target.value)}
+                            />
+                          </>
+                        )}
+
+                        <div className="md:col-span-6 flex items-center justify-between">
+                          {/* Resumen faltante/ok (simple) */}
+                          <div className="text-[11px] text-gray-600">
+                            {(() => {
+                              const faltan = [];
+                              if (!actaExist && !v.acta) faltan.push("ACTA");
+                              if (!rotuloExist && !v.rotulo) faltan.push("Rótulo");
+                              if (!(typeof metrajeExist === "number") && v.metraje === undefined) faltan.push("Metros");
+                              if (esResidencial(l)) {
+                                if (!(typeof templExist === "number") && v.templadores === undefined) faltan.push("Templadores");
+                                if (!(typeof hebiExist === "number") && v.hebillas === undefined) faltan.push("Hebillas");
+                                if (!(typeof clevExist === "number") && v.clevis === undefined) faltan.push("Clevis");
+                              }
+                              return faltan.length
+                                ? `Faltan: ${faltan.join(", ")}`
+                                : "Todo OK";
+                            })()}
+                          </div>
+
                           <button
                             disabled={saving}
                             onClick={() => guardarLiquidacion(l)}
                             className={cls(
                               "px-4 py-1.5 rounded text-white",
-                              saving ? "bg-slate-400" : "bg-blue-600 hover:bg-blue-700"
+                              saving ? "bg-slate-400" : ya ? "bg-emerald-600 hover:bg-emerald-700" : "bg-blue-600 hover:bg-blue-700"
                             )}
                           >
-                            {saving ? "Guardando…" : "Liquidar"}
+                            {saving ? "Guardando…" : ya ? "Actualizar" : "Liquidar"}
                           </button>
                         </div>
                       </div>
@@ -522,8 +693,10 @@ export default function LiquidacionMaterialesPage() {
       </div>
 
       <p className="mt-3 text-xs text-gray-500">
-        * La liquidación descuenta del stock de la cuadrilla (subcolección <code>stock_materiales</code>) y registra
-        el movimiento en <code>liquidacion_materiales</code> con vínculo a la instalación.
+        * Se descuenta del stock de la cuadrilla (subcolección <code>stock_materiales</code>) y se
+        <strong> actualiza</strong> el documento de <code>liquidacion_instalaciones</code> agregando los campos de
+        liquidación (ACTA, rótulo, metros y, si aplica, templadores/hebillas/clevis). Los registros existentes se
+        muestran como chips y los inputs se precargan para facilitar actualizaciones.
       </p>
     </div>
   );
