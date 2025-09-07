@@ -14,7 +14,8 @@ import {
   Package, PackageOpen, FileStack, UserRoundSearch, UserPlus, TrafficCone, CheckCircle,
   FileChartColumn, ChevronDown, Archive as IconoGrupoAlmacen, UsersRound as IconoGrupoAdministracion,
   DollarSign as IconoGrupoLiquidacion, Building as IconoGrupoInstalaciones, ListChecks as IconoGrupoAsistencia,
-  Wrench as IconoGrupoConfiguracion, UploadCloud, Home
+  Wrench as IconoGrupoConfiguracion, UploadCloud, Home,
+  Boxes 
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import Notificaciones from "@/app/components/Notificaciones";
@@ -198,6 +199,12 @@ export default function LayoutApp({ children }) {
     subItems: [
       { href: "/liquidacion/liquidacion-almacen", label: "Liquidación Almacén", icon: I(HandCoins), roles: ["Almacén","TI"] },
       { href: "/liquidacion/liquidacion", label: "Instalaciones Liquidadas", icon: I(CheckCircle), roles: ["Almacén","TI","Gerencia"] },
+      {
+      href: "/liquidacion/liquidacion-materiales",
+      label: "Liquidación Materiales",
+      icon: I(PackageSearch, 18), // o puedes usar otro (Archive, FileStack, etc.)
+      roles: ["Almacén", "TI"],
+    },
     ]
   },
   {
@@ -207,6 +214,12 @@ export default function LayoutApp({ children }) {
     roles: ["Almacén","Gerencia","TI"],
     subItems: [
       { href: "/almacen/stock", label: "Stock General Equipos", icon: I(PackageSearch), roles: ["Almacén","TI","Gerencia"] },
+      { 
+      href: "/almacen/stock-materiales",
+      label: "Stock Materiales",
+      icon: I(Boxes),                 // puedes cambiarlo por I(PackageSearch) si te gusta más
+      roles: ["Almacén", "TI", "Gerencia"]
+    },
       { href: "/almacen/carga-equipos", label: "Ingreso Equipos", icon: I(HardDrive), roles: ["Almacén","TI"] },
       { href: "/almacen/despacho", label: "Despacho Equipos", icon: I(Package), roles: ["Almacén","TI"] },
       { href: "/almacen/ingreso-materiales-venta", label: "Ingreso Materiales", icon: I(Archive), roles: ["Almacén","Gerencia","TI"] },

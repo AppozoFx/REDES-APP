@@ -8,7 +8,6 @@ import {
   doc,
   runTransaction,
   serverTimestamp,
-  updateDoc,
 } from "firebase/firestore";
 import dayjs from "dayjs";
 import customParseFormat from "dayjs/plugin/customParseFormat";
@@ -61,9 +60,7 @@ const tieneDatosLiq = (row) => {
   const t = Number.isFinite(row.templadores) ? row.templadores : 0;
   const h = Number.isFinite(row.hebillas) ? row.hebillas : 0;
   const c = Number.isFinite(row.clevis) ? row.clevis : 0;
-  // Si es residencial, consideramos también T/H/C
   if (esResidencial(row)) return !!(a || r || m || t || h || c);
-  // Si no, con ACTA/ROTULO/METROS basta
   return !!(a || r || m);
 };
 
@@ -77,12 +74,13 @@ export default function LiquidacionMaterialesPage() {
   const [insts, setInsts] = useState([]);
   const [cuadrillasIdx, setCuadrillasIdx] = useState({}); // nombre -> { id, r_c/categoria }
 
-  // filtros (sin R/C)
+  // filtros (sin R/C) + estado (toggle)
   const [filtros, setFiltros] = useState({
     mes: dayjs().format("YYYY-MM"),
     dia: "",
     cuadrilla: "",
     busqueda: "",
+    estado: "todos", // "todos" | "pendientes" | "liquidados"
   });
 
   // Edición / liquidación por fila
@@ -117,7 +115,7 @@ export default function LiquidacionMaterialesPage() {
           if (nombre) {
             idx[nombre] = {
               id: d.id,
-              categoria: v?.categoria || v?.r_c || v?.tipo || "", // opcional
+              categoria: v?.categoria || v?.r_c || v?.tipo || "",
               r_c: v?.r_c || "",
             };
           }
@@ -140,6 +138,7 @@ export default function LiquidacionMaterialesPage() {
     const dia = filtros.dia;
     const q = norm(filtros.busqueda);
     const cuad = norm(filtros.cuadrilla);
+    const ver = filtros.estado; // "todos" | "pendientes" | "liquidados"
 
     return insts.filter((l) => {
       const f = convFecha(l.fechaInstalacion);
@@ -148,17 +147,17 @@ export default function LiquidacionMaterialesPage() {
       const okMes = dayjs(f).format("YYYY-MM") === mes;
       const okDia = dia ? dayjs(f).format("YYYY-MM-DD") === dia : true;
 
-      // cuadrilla: "contiene" y case-insensitive
       const lCuad = norm(l.cuadrillaNombre);
       const okCuad = cuad ? lCuad.includes(cuad) : true;
 
-      // búsqueda por código, cliente o cuadrilla (contiene)
-      const hay = norm(
-        `${l.codigoCliente || ""} ${l.cliente || ""} ${l.cuadrillaNombre || ""}`
-      );
+      const hay = norm(`${l.codigoCliente || ""} ${l.cliente || ""} ${l.cuadrillaNombre || ""}`);
       const okQ = q ? hay.includes(q) : true;
 
-      return okMes && okDia && okCuad && okQ;
+      const liq = tieneDatosLiq(l);
+      const okEstado =
+        ver === "todos" ? true : ver === "liquidados" ? liq : !liq;
+
+      return okMes && okDia && okCuad && okQ && okEstado;
     });
   }, [insts, filtros]);
 
@@ -189,12 +188,12 @@ export default function LiquidacionMaterialesPage() {
   };
 
   /* =========================
-     Transacción de guardado (actualiza el doc de instalaciones)
+     Transacción de guardado (actualiza el doc) con DESCUENTO DIFERENCIAL
   ========================= */
   const guardarLiquidacion = async (row) => {
     const f = formFila[row.id] || {};
 
-    // Tomar "existente o nuevo" para que al actualizar no borre campos si se dejan vacíos accidentalmente
+    // 1) Consolidar "nuevo" valor: si input vacío, conservar existente
     const actaInput = (f.acta ?? "").toString().trim();
     const rotuloInput = (f.rotulo ?? "").toString().trim();
     const metrajeInput = f.metraje ?? "";
@@ -204,22 +203,29 @@ export default function LiquidacionMaterialesPage() {
 
     const acta = actaInput || (row.acta || "");
     const rotulo = rotuloInput || (row.rotuloNapCto || "");
-    const metraje = Math.max(0, toFloat(metrajeInput !== "" ? metrajeInput : row.metraje_instalado));
+
+    const prevMetraje = Number.isFinite(row.metraje_instalado) ? row.metraje_instalado : 0;
+    const newMetraje = Math.max(0, toFloat(metrajeInput !== "" ? metrajeInput : prevMetraje));
 
     const soloRes = esResidencial(row);
-    const templadoresRaw = soloRes ? (templInput !== "" ? templInput : row.templadores) : 0;
-    const hebillasRaw = soloRes ? (hebiInput !== "" ? hebiInput : row.hebillas) : 0;
-    const clevisRaw = soloRes ? (clevInput !== "" ? clevInput : row.clevis) : 0;
 
-    const templadores = Math.max(0, toInt(templadoresRaw));
-    const hebillas = Math.max(0, toInt(hebillasRaw));
-    const clevis = Math.max(0, toInt(clevisRaw));
+    const prevTempl = soloRes && Number.isFinite(row.templadores) ? row.templadores : 0;
+    const prevHebi  = soloRes && Number.isFinite(row.hebillas) ? row.hebillas : 0;
+    const prevClev  = soloRes && Number.isFinite(row.clevis) ? row.clevis : 0;
 
-    if (!acta) return toast.error("Ingresa/scanea el Nº de ACTA.");
+    const newTempl = soloRes ? Math.max(0, toInt(templInput !== "" ? templInput : prevTempl)) : 0;
+    const newHebi  = soloRes ? Math.max(0, toInt(hebiInput  !== "" ? hebiInput  : prevHebi )) : 0;
+    const newClev  = soloRes ? Math.max(0, toInt(clevInput  !== "" ? clevInput  : prevClev )) : 0;
+
+    // 2) Validaciones mínimas
+    if (!acta)  return toast.error("Ingresa/scanea el Nº de ACTA.");
     if (!rotulo) return toast.error("Ingresa el rótulo NAP/CTO.");
-    if (metraje <= 0 && templadores + hebillas + clevis <= 0) {
-      return toast.error("No hay cantidades para liquidar.");
-    }
+
+    // 3) Calcular DELTAS (solo se descuentan positivos)
+    const dMetraje = Math.max(0, newMetraje - prevMetraje);
+    const dTempl   = Math.max(0, newTempl   - prevTempl);
+    const dHebi    = Math.max(0, newHebi    - prevHebi);
+    const dClev    = Math.max(0, newClev    - prevClev);
 
     const cuadrillaNombre = row.cuadrillaNombre || "";
     const cuadrillaInfo = cuadrillasIdx[cuadrillaNombre];
@@ -231,92 +237,87 @@ export default function LiquidacionMaterialesPage() {
     setGuardandoId(row.id);
     try {
       await runTransaction(db, async (tx) => {
-        // Refs de stock
-        const refBob = doc(db, "cuadrillas", cuadId, "stock_materiales", "bobina");
-
+        // 4) Preparar refs solo para lo que tenga delta > 0
         const refsOpt = [];
-        if (metraje > 0) refsOpt.push(refBob);
-
+        if (dMetraje > 0) {
+          refsOpt.push(doc(db, "cuadrillas", cuadId, "stock_materiales", "bobina"));
+        }
         if (soloRes) {
-          const rTem = doc(db, "cuadrillas", cuadId, "stock_materiales", "templadores");
-          const rHeb = doc(db, "cuadrillas", cuadId, "stock_materiales", "hebillas");
-          const rCle = doc(db, "cuadrillas", cuadId, "stock_materiales", "clevis");
-          if (templadores > 0) refsOpt.push(rTem);
-          if (hebillas > 0) refsOpt.push(rHeb);
-          if (clevis > 0) refsOpt.push(rCle);
+          if (dTempl > 0) refsOpt.push(doc(db, "cuadrillas", cuadId, "stock_materiales", "templadores"));
+          if (dHebi  > 0) refsOpt.push(doc(db, "cuadrillas", cuadId, "stock_materiales", "hebillas"));
+          if (dClev  > 0) refsOpt.push(doc(db, "cuadrillas", cuadId, "stock_materiales", "clevis"));
         }
 
-        // Leer cantidades actuales
+        // 5) Leer cantidades y validar stock suficiente SOLO para las diferencias
         const snaps = await Promise.all(refsOpt.map((r) => tx.get(r)));
         const getCant = (id) => toFloat(snaps.find((s) => s.ref.id === id)?.data()?.cantidad || 0);
 
-        // Validar no negativo
         const faltas = [];
-        if (metraje > 0) {
+        if (dMetraje > 0) {
           const cur = getCant("bobina");
-          if (cur - metraje < 0) faltas.push(`bobina (tienes ${cur} m, pides ${metraje} m)`);
+          if (cur - dMetraje < 0) faltas.push(`bobina (tienes ${cur} m, pides +${dMetraje} m)`);
         }
         if (soloRes) {
-          if (templadores > 0) {
+          if (dTempl > 0) {
             const cur = getCant("templadores");
-            if (cur - templadores < 0) faltas.push(`templadores (tienes ${cur}, pides ${templadores})`);
+            if (cur - dTempl < 0) faltas.push(`templadores (tienes ${cur}, pides +${dTempl})`);
           }
-          if (hebillas > 0) {
+          if (dHebi > 0) {
             const cur = getCant("hebillas");
-            if (cur - hebillas < 0) faltas.push(`hebillas (tienes ${cur}, pides ${hebillas})`);
+            if (cur - dHebi < 0) faltas.push(`hebillas (tienes ${cur}, pides +${dHebi})`);
           }
-          if (clevis > 0) {
+          if (dClev > 0) {
             const cur = getCant("clevis");
-            if (cur - clevis < 0) faltas.push(`clevis (tienes ${cur}, pides ${clevis})`);
+            if (cur - dClev < 0) faltas.push(`clevis (tienes ${cur}, pides +${dClev})`);
           }
         }
 
         if (faltas.length) throw new Error("Stock insuficiente: " + faltas.join(" | "));
 
-        // Descuentos de stock
+        // 6) Descontar SOLO las diferencias positivas
         const marca = {
           actualizadoEn: serverTimestamp(),
           actualizadoPor: userData?.displayName || userData?.email || "Sistema",
         };
-        if (metraje > 0) {
+        if (dMetraje > 0) {
+          const refBob = doc(db, "cuadrillas", cuadId, "stock_materiales", "bobina");
           const cur = getCant("bobina");
-          tx.update(refBob, { cantidad: cur - metraje, ...marca });
+          tx.update(refBob, { cantidad: cur - dMetraje, ...marca });
         }
         if (soloRes) {
-          if (templadores > 0) {
+          if (dTempl > 0) {
             const r = doc(db, "cuadrillas", cuadId, "stock_materiales", "templadores");
             const cur = getCant("templadores");
-            tx.update(r, { cantidad: cur - templadores, ...marca });
+            tx.update(r, { cantidad: cur - dTempl, ...marca });
           }
-          if (hebillas > 0) {
+          if (dHebi > 0) {
             const r = doc(db, "cuadrillas", cuadId, "stock_materiales", "hebillas");
             const cur = getCant("hebillas");
-            tx.update(r, { cantidad: cur - hebillas, ...marca });
+            tx.update(r, { cantidad: cur - dHebi, ...marca });
           }
-          if (clevis > 0) {
+          if (dClev > 0) {
             const r = doc(db, "cuadrillas", cuadId, "stock_materiales", "clevis");
             const cur = getCant("clevis");
-            tx.update(r, { cantidad: cur - clevis, ...marca });
+            tx.update(r, { cantidad: cur - dClev, ...marca });
           }
         }
 
-        // 👉 Actualizar la instalación existente, agregando o sobreescribiendo SOLO estos campos
+        // 7) Actualizar el documento de instalación con los NUEVOS totales
         const instRef = doc(db, "liquidacion_instalaciones", row.id);
         tx.update(instRef, {
-          acta,                        // "005-0024274"
-          rotuloNapCto: rotulo,        // texto
-          metraje_instalado: metraje,  // número (m)
-          templadores: soloRes ? templadores : 0,
-          hebillas: soloRes ? hebillas : 0,
-          clevis: soloRes ? clevis : 0,
+          acta,                         // "005-0024274"
+          rotuloNapCto: rotulo,         // texto
+          metraje_instalado: newMetraje,// número (m)
+          templadores: soloRes ? newTempl : 0,
+          hebillas:    soloRes ? newHebi  : 0,
+          clevis:      soloRes ? newClev  : 0,
           materiales_liq_por: userData?.displayName || userData?.email || "Sistema",
           materiales_liq_en: serverTimestamp(),
         });
       });
 
-      toast.success(tieneDatosLiq(row) ? "✅ Liquidación actualizada." : "✅ Liquidación registrada.");
-      // refrescar datos para ver chips/estado
-      await obtenerInsts();
+      toast.success(tieneDatosLiq(row) ? "✅ Actualización realizada (diferencia aplicada)." : "✅ Liquidación registrada.");
+      await obtenerInsts(); // refrescar para ver chips/estado
       setFormFila((p) => {
         const cp = { ...p };
         delete cp[row.id];
@@ -346,8 +347,8 @@ export default function LiquidacionMaterialesPage() {
         </button>
       </div>
 
-      {/* Filtros (sin R/C) */}
-      <div className="mb-4 grid gap-3 md:grid-cols-2 lg:grid-cols-4">
+      {/* Filtros (sin R/C) + toggle estado */}
+      <div className="mb-4 grid gap-3 md:grid-cols-2 lg:grid-cols-5">
         <div className="flex flex-col">
           <label className="text-sm font-medium text-gray-700">Mes</label>
           <input
@@ -388,7 +389,7 @@ export default function LiquidacionMaterialesPage() {
           </datalist>
         </div>
 
-        <div className="flex flex-col md:col-span-1">
+        <div className="flex flex-col">
           <label className="text-sm font-medium text-gray-700">Código o Cliente</label>
           <input
             type="text"
@@ -398,6 +399,21 @@ export default function LiquidacionMaterialesPage() {
             onChange={onChangeFiltro}
             className="border px-2 py-1 rounded"
           />
+        </div>
+
+        <div className="flex flex-col">
+          <label className="text-sm font-medium text-gray-700">Estado</label>
+          <select
+            name="estado"
+            value={filtros.estado}
+            onChange={onChangeFiltro}
+            className="border px-2 py-1 rounded"
+            title="Filtra por estado de liquidación"
+          >
+            <option value="todos">Todos</option>
+            <option value="pendientes">Pendientes</option>
+            <option value="liquidados">Liquidados</option>
+          </select>
         </div>
       </div>
 
@@ -440,7 +456,6 @@ export default function LiquidacionMaterialesPage() {
                   ? "bg-green-100 text-green-800 border-green-300"
                   : "bg-amber-100 text-amber-800 border-amber-300";
 
-                // valores existentes para mostrar chips
                 const actaExist = (l.acta || "").trim();
                 const rotuloExist = (l.rotuloNapCto || "").trim();
                 const metrajeExist = Number.isFinite(l.metraje_instalado) ? l.metraje_instalado : null;
@@ -510,7 +525,6 @@ export default function LiquidacionMaterialesPage() {
                         ) : (
                           <span className="px-2 py-0.5 rounded-full text-xs bg-rose-50 border border-rose-200 text-rose-700">Metros: —</span>
                         )}
-
                         {esResidencial(l) && (
                           <>
                             {typeof templExist === "number" ? (
@@ -542,18 +556,13 @@ export default function LiquidacionMaterialesPage() {
                           placeholder="Nº ACTA (scan)"
                           className={cls(
                             "border rounded px-2 py-1",
-                            (l.acta && !v.acta) || (v.acta && v.acta.trim() !== "")
-                              ? "border-green-400"
-                              : ""
+                            (l.acta && !v.acta) || (v.acta && v.acta.trim() !== "") ? "border-green-400" : ""
                           )}
                           value={v.acta ?? l.acta ?? ""}
                           onChange={(e) => {
                             const raw = e.target.value;
                             const soloDig = raw.replace(/[^\d]/g, "");
-                            const form =
-                              soloDig.length <= 3
-                                ? soloDig
-                                : `${soloDig.slice(0, 3)}-${soloDig.slice(3)}`;
+                            const form = soloDig.length <= 3 ? soloDig : `${soloDig.slice(0, 3)}-${soloDig.slice(3)}`;
                             setField(l.id, "acta", form);
                           }}
                         />
@@ -563,9 +572,7 @@ export default function LiquidacionMaterialesPage() {
                           placeholder="Rótulo NAP/CTO"
                           className={cls(
                             "border rounded px-2 py-1",
-                            (l.rotuloNapCto && !v.rotulo) || (v.rotulo && v.rotulo.trim() !== "")
-                              ? "border-green-400"
-                              : ""
+                            (l.rotuloNapCto && !v.rotulo) || (v.rotulo && v.rotulo.trim() !== "") ? "border-green-400" : ""
                           )}
                           value={v.rotulo ?? l.rotuloNapCto ?? ""}
                           onChange={(e) => setField(l.id, "rotulo", e.target.value)}
@@ -579,15 +586,9 @@ export default function LiquidacionMaterialesPage() {
                           className={cls(
                             "border rounded px-2 py-1",
                             (typeof l.metraje_instalado === "number" && v.metraje === undefined) ||
-                              (v.metraje !== undefined && String(v.metraje).trim() !== "")
-                              ? "border-green-400"
-                              : ""
+                            (v.metraje !== undefined && String(v.metraje).trim() !== "") ? "border-green-400" : ""
                           )}
-                          value={
-                            v.metraje !== undefined
-                              ? v.metraje
-                              : (typeof l.metraje_instalado === "number" ? l.metraje_instalado : "")
-                          }
+                          value={v.metraje !== undefined ? v.metraje : (typeof l.metraje_instalado === "number" ? l.metraje_instalado : "")}
                           onChange={(e) => setField(l.id, "metraje", e.target.value)}
                           title="Metraje instalado (descuenta bobina)"
                         />
@@ -602,15 +603,9 @@ export default function LiquidacionMaterialesPage() {
                               className={cls(
                                 "border rounded px-2 py-1",
                                 (typeof l.templadores === "number" && v.templadores === undefined) ||
-                                  (v.templadores !== undefined && String(v.templadores).trim() !== "")
-                                  ? "border-green-400"
-                                  : ""
+                                (v.templadores !== undefined && String(v.templadores).trim() !== "") ? "border-green-400" : ""
                               )}
-                              value={
-                                v.templadores !== undefined
-                                  ? v.templadores
-                                  : (typeof l.templadores === "number" ? l.templadores : "")
-                              }
+                              value={v.templadores !== undefined ? v.templadores : (typeof l.templadores === "number" ? l.templadores : "")}
                               onChange={(e) => setField(l.id, "templadores", e.target.value)}
                             />
                             <input
@@ -620,15 +615,9 @@ export default function LiquidacionMaterialesPage() {
                               className={cls(
                                 "border rounded px-2 py-1",
                                 (typeof l.hebillas === "number" && v.hebillas === undefined) ||
-                                  (v.hebillas !== undefined && String(v.hebillas).trim() !== "")
-                                  ? "border-green-400"
-                                  : ""
+                                (v.hebillas !== undefined && String(v.hebillas).trim() !== "") ? "border-green-400" : ""
                               )}
-                              value={
-                                v.hebillas !== undefined
-                                  ? v.hebillas
-                                  : (typeof l.hebillas === "number" ? l.hebillas : "")
-                              }
+                              value={v.hebillas !== undefined ? v.hebillas : (typeof l.hebillas === "number" ? l.hebillas : "")}
                               onChange={(e) => setField(l.id, "hebillas", e.target.value)}
                             />
                             <input
@@ -638,15 +627,9 @@ export default function LiquidacionMaterialesPage() {
                               className={cls(
                                 "border rounded px-2 py-1",
                                 (typeof l.clevis === "number" && v.clevis === undefined) ||
-                                  (v.clevis !== undefined && String(v.clevis).trim() !== "")
-                                  ? "border-green-400"
-                                  : ""
+                                (v.clevis !== undefined && String(v.clevis).trim() !== "") ? "border-green-400" : ""
                               )}
-                              value={
-                                v.clevis !== undefined
-                                  ? v.clevis
-                                  : (typeof l.clevis === "number" ? l.clevis : "")
-                              }
+                              value={v.clevis !== undefined ? v.clevis : (typeof l.clevis === "number" ? l.clevis : "")}
                               onChange={(e) => setField(l.id, "clevis", e.target.value)}
                             />
                           </>
@@ -665,9 +648,7 @@ export default function LiquidacionMaterialesPage() {
                                 if (!(typeof hebiExist === "number") && v.hebillas === undefined) faltan.push("Hebillas");
                                 if (!(typeof clevExist === "number") && v.clevis === undefined) faltan.push("Clevis");
                               }
-                              return faltan.length
-                                ? `Faltan: ${faltan.join(", ")}`
-                                : "Todo OK";
+                              return faltan.length ? `Faltan: ${faltan.join(", ")}` : "Todo OK";
                             })()}
                           </div>
 
@@ -694,9 +675,8 @@ export default function LiquidacionMaterialesPage() {
 
       <p className="mt-3 text-xs text-gray-500">
         * Se descuenta del stock de la cuadrilla (subcolección <code>stock_materiales</code>) y se
-        <strong> actualiza</strong> el documento de <code>liquidacion_instalaciones</code> agregando los campos de
-        liquidación (ACTA, rótulo, metros y, si aplica, templadores/hebillas/clevis). Los registros existentes se
-        muestran como chips y los inputs se precargan para facilitar actualizaciones.
+        <strong> actualiza</strong> el documento de <code>liquidacion_instalaciones</code> con los
+        nuevos totales. Si aumentas cantidades, se descuenta <u>solo la diferencia</u>; si reduces, no se repone (puedo habilitar reposición si lo necesitas).
       </p>
     </div>
   );
