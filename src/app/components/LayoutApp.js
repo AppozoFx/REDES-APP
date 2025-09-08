@@ -245,7 +245,8 @@ export default function LayoutApp({ children }) {
       { href: "/admin/usuarios/nuevo", label: "Nuevo Usuario", icon: I(UserPlus), roles: ["Gerencia","TI"] },
       { href: "/admin/importar-instalaciones", label: "Importar Instalaciones", icon: I(TrafficCone), roles: ["Gerencia","TI","Gestor"] },
       { href: "/admin/importar-inconcert", label: "Importar INCONCERT", icon: I(TrafficCone), roles: ["Gerencia","TI"] },
-      { href: "/gerencia/orden_compra", label: "Órden de Compra", icon: I(FileChartColumn), roles: ["Gerencia","TI"] }
+      { href: "/gerencia/orden_compra", label: "Órden de Compra", icon: I(FileChartColumn), roles: ["Gerencia","TI"] },
+      { href: "/gerencia/coordinadores", label: "Coordinadores", icon: I(Users), roles: ["Gerencia","TI"] }
     ]
   },
   {

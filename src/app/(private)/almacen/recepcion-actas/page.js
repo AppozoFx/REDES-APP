@@ -17,6 +17,7 @@ import JsBarcode from "jsbarcode";
 import { jsPDF } from "jspdf";
 import toast from "react-hot-toast";
 
+
 /* ===========================================================
    UI Helpers (colores y estilos consistentes)
 =========================================================== */
@@ -72,6 +73,9 @@ const Button = ({ children, variant = "primary", className = "", ...rest }) => {
     </button>
   );
 };
+
+
+
 
 export default function RecepcionActasPage() {
   const [cuadrilla, setCuadrilla] = useState("");
