@@ -205,6 +205,12 @@ export default function LayoutApp({ children }) {
       icon: I(PackageSearch, 18), // o puedes usar otro (Archive, FileStack, etc.)
       roles: ["Almacén", "TI"],
     },
+    {
+      href: "/liquidacion/liquidacion_detalle",
+      label: "Liquidación Detalle",
+      icon: I(ClipboardList, 18), // usa el icono que prefieras
+      roles: ["TI", "Gerencia"],
+    },
     ]
   },
   {

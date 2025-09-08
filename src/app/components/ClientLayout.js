@@ -14,7 +14,9 @@ const isPublicRoute = (pathname) => {
 };
 
 export default function ClientLayout({ children }) {
-  const { user, initializing } = useAuth();
+  // useAuth provides `userData` in this project (other components expect that name).
+  // Use the same name to keep behavior consistent and avoid redirect loops.
+  const { userData, initializing } = useAuth();
   const pathname = usePathname() || "/";
   const router = useRouter();
 
@@ -34,20 +36,20 @@ export default function ClientLayout({ children }) {
     if (initializing) return;
 
     // SIN sesión → rutas privadas van a /login
-    if (!user && !publicRoute) {
+    if (!userData && !publicRoute) {
       safeReplace("/login");
       return;
     }
 
     // CON sesión → rutas públicas van a /dashboard
-    if (user && publicRoute) {
+    if (userData && publicRoute) {
       safeReplace("/dashboard");
       return;
     }
 
     // si no redirige, libera memo del último destino
     lastRedirect.current = null;
-  }, [initializing, user, publicRoute, pathname]);
+  }, [initializing, userData, publicRoute, pathname]);
 
   // splash durante onAuthStateChanged
   if (initializing) {
