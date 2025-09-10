@@ -593,32 +593,38 @@ const lowEquipTypes = [];  // [{ tipo, restante }]
         }
 
         // 4) Bobina a cuadrilla
-        if (tipo === "Residencial" && drumps.length > 0) {
-          for (const code of drumps) {
-            const bRef = doc(db, `cuadrillas/${cuadrillaSel.id}/stock_bobinas`, code);
-            batch.set(bRef, {
-              codigo: code,
-              metros: RES_BOBINA_METROS,
-              estado: "activo",
-              f_ingreso: serverTimestamp(),
-              usuario,
-            });
-          }
-        } else if (tipo === "Condominio" && bobinaAlmacen > 0) {
-          const ref = doc(db, `cuadrillas/${cuadrillaSel.id}/stock_materiales/bobina`);
-          const snap = await getDoc(ref);
-          const actual = snap.exists() ? Number(snap.data().cantidad || 0) : 0;
-          batch.set(
-            ref,
-            {
-              nombre: "bobina",
-              cantidad: actual + bobinaAlmacen,
-              actualizadoPor: usuario,
-              actualizadoEn: serverTimestamp(),
-            },
-            { merge: true }
-          );
-        }
+if (tipo === "Residencial" && drumps.length > 0) {
+  for (const code of drumps) {
+    // --- 4.1 Crear doc individual en stock_bobinas ---
+    const bRef = doc(db, `cuadrillas/${cuadrillaSel.id}/stock_bobinas`, code);
+    batch.set(bRef, {
+      codigo: code,
+      metros: RES_BOBINA_METROS,
+      estado: "activo",
+      f_ingreso: serverTimestamp(),
+      usuario,
+    });
+  }
+
+  // --- 4.2 Sumar metros al acumulado en stock_materiales/bobina ---
+  const refBobinaCuad = doc(db, `cuadrillas/${cuadrillaSel.id}/stock_materiales/bobina`);
+  const snapBobinaCuad = await getDoc(refBobinaCuad);
+  const actual = snapBobinaCuad.exists() ? Number(snapBobinaCuad.data().cantidad || 0) : 0;
+
+  const metrosTotales = drumps.length * RES_BOBINA_METROS;
+
+  batch.set(
+    refBobinaCuad,
+    {
+      nombre: "bobina",
+      cantidad: actual + metrosTotales,
+      actualizadoPor: usuario,
+      actualizadoEn: serverTimestamp(),
+    },
+    { merge: true }
+  );
+}
+
 
         // 🔎 Calcula stock restante por tipo de equipo en almacén (post-despacho)
 const porTipo = equipos.reduce((acc, e) => {

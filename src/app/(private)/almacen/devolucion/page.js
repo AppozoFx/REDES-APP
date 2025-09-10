@@ -14,6 +14,9 @@ import {
   addDoc,
   serverTimestamp,
   deleteDoc,
+  query,              // 👈 añadido
+  where,              // 👈 añadido
+  limit,              // 👈 añadido
 } from "firebase/firestore";
 import { ref as storageRef, uploadBytes, getDownloadURL } from "firebase/storage";
 import { useAuth } from "@/app/context/AuthContext";
@@ -142,14 +145,12 @@ const generarPDFDevolucion = async (guiaId, datos) => {
       docpdf.text(`Metros devueltos: ${datos.metraje} m`, 40, y, C); y += 5;
     }
     if (datos.bobinaCompletaDevuelta) {
-  y += 2;
-  docpdf.setFont("helvetica", "bold");
-  docpdf.text("Bobina completa devuelta", 40, y, C);
-  docpdf.setFont("helvetica", "normal");
-  y += 5;
-}
-
-
+      y += 2;
+      docpdf.setFont("helvetica", "bold");
+      docpdf.text("Bobina completa devuelta", 40, y, C);
+      docpdf.setFont("helvetica", "normal");
+      y += 5;
+    }
 
     const mats = Object.entries(datos.materiales || {});
     if (mats.length > 0) {
@@ -222,6 +223,35 @@ const generarPDFDevolucion = async (guiaId, datos) => {
 
   return urlComprobante;
 };
+
+/* =======================
+   HELPERS de búsqueda rápida
+======================= */
+const normSN = (s) => (s || "").toString().trim().toUpperCase();
+
+/**
+ * Busca un equipo por SN:
+ * - Primero intenta docId == SN (O(1))
+ * - Si no, hace query where("SN","==",SN) con limit(1)
+ * Devuelve { ref, data } o null.
+ */
+async function findEquipoPorSN(db, sn) {
+  const id = normSN(sn);
+
+  const directRef = doc(db, "equipos", id);
+  const directSnap = await getDoc(directRef);
+  if (directSnap.exists()) {
+    return { ref: directRef, data: directSnap.data() };
+  }
+
+  const q = query(collection(db, "equipos"), where("SN", "==", id), limit(1));
+  const qs = await getDocs(q);
+  if (!qs.empty) {
+    const d = qs.docs[0];
+    return { ref: d.ref, data: d.data() };
+  }
+  return null;
+}
 
 /* =======================
    COMPONENTE
@@ -339,9 +369,9 @@ export default function Devolucion() {
     return `DEV-${anio}-${String(nuevo).padStart(5, "0")}`;
   };
 
-  /* ======= Escanear SN ======= */
+  /* ======= Escanear SN (optimizado) ======= */
   const handleScan = async (e) => {
-    const codigo = e.target.value.trim().toUpperCase();
+    const codigo = normSN(e.target?.value ?? sn);
 
     const fire = async () => {
       if (!codigo) return;
@@ -355,15 +385,15 @@ export default function Devolucion() {
         return;
       }
 
-      const snap = await getDocs(collection(db, "equipos"));
-      const docEq = snap.docs.find((d) => (d.data().SN || "").toUpperCase() === codigo);
-      if (!docEq) {
+      // 🚀 búsqueda rápida
+      const found = await findEquipoPorSN(db, codigo);
+      if (!found) {
         setErrorSn("❌ Este SN no se encuentra en la base de datos.");
         setSn("");
         return;
       }
 
-      const data = docEq.data();
+      const data = found.data;
       const estado = (data.estado || "").toLowerCase();
 
       if (estado !== "campo" && estado !== "instalado") {
@@ -397,7 +427,7 @@ export default function Devolucion() {
       setErrorSn("");
       setSn("");
 
-      if ((data.equipo || "").toUpperCase() === "ONT") {
+      if (normSN(data.equipo) === "ONT") {
         setMaterialesDevueltos((prev) => {
           const n = { ...prev };
           Object.entries(MATS_AUT_ONT).forEach(([k, v]) => (n[k] = (n[k] || 0) + v));
@@ -461,22 +491,21 @@ export default function Devolucion() {
     }
 
     // bobina residencial
-if (datosDevolucion.tipo === "Residencial" && datosDevolucion.drump) {
-  const bob = bobinasActivas.find(
-    (b) => (b.codigo || "").toUpperCase() === (datosDevolucion.drump || "").toUpperCase()
-  );
-  if (!bob) {
-    errores.push(`• DRUMP ${datosDevolucion.drump} no está en stock de la cuadrilla.`);
-  } else {
-    const m = Number(datosDevolucion.metraje) || 0;
-    if (m > 0 && m > Number(bob.metros || 0)) {
-      errores.push(
-        `• DRUMP ${datosDevolucion.drump}: devuelves ${m} m y solo tiene ${bob.metros} m`
+    if (datosDevolucion.tipo === "Residencial" && datosDevolucion.drump) {
+      const bob = bobinasActivas.find(
+        (b) => (b.codigo || "").toUpperCase() === (datosDevolucion.drump || "").toUpperCase()
       );
+      if (!bob) {
+        errores.push(`• DRUMP ${datosDevolucion.drump} no está en stock de la cuadrilla.`);
+      } else {
+        const m = Number(datosDevolucion.metraje) || 0;
+        if (m > 0 && m > Number(bob.metros || 0)) {
+          errores.push(
+            `• DRUMP ${datosDevolucion.drump}: devuelves ${m} m y solo tiene ${bob.metros} m`
+          );
+        }
+      }
     }
-  }
-}
-
 
     if (errores.length > 0) {
       toast.error("Revisa los montos devueltos:\n" + errores.join("\n"));
@@ -487,87 +516,86 @@ if (datosDevolucion.tipo === "Residencial" && datosDevolucion.drump) {
 
   /* ======= DRUMP residencial ======= */
   const procesarDevolucionBobinaResidencial = async (batch, guiaId, { forceCierre = false } = {}) => {
-  const drRef = doc(db, `cuadrillas/${datosDevolucion.cuadrillaId}/stock_bobinas`, datosDevolucion.drump);
-  const drSnap = await getDoc(drRef);
-  if (!drSnap.exists()) {
-    toast.error(`❌ El DRUMP ${datosDevolucion.drump} no existe en la cuadrilla.`);
-    throw new Error("DRUMP no encontrado");
-  }
+    const drRef = doc(db, `cuadrillas/${datosDevolucion.cuadrillaId}/stock_bobinas`, datosDevolucion.drump);
+    const drSnap = await getDoc(drRef);
+    if (!drSnap.exists()) {
+      toast.error(`❌ El DRUMP ${datosDevolucion.drump} no existe en la cuadrilla.`);
+      throw new Error("DRUMP no encontrado");
+    }
 
-  const datosBobina = drSnap.data();
+    const datosBobina = drSnap.data();
 
-  if (forceCierre) {
-    // Devolución de bobina completa: estado devuelto y metros 0
-    batch.set(
-      drRef,
-      {
-        metros: 0,
-        estado: "devuelto",
-        f_devolucion: serverTimestamp(),
-        guia_devolucion: guiaId,
-        usuario: datosDevolucion.usuario,
-      },
-      { merge: true }
-    );
-    toast.success(`♻️ Bobina ${datosDevolucion.drump} marcada como *devuelto* (0 m).`);
-    // Importante: no sumamos metros al almacén en este modo.
-    return;
-  }
+    if (forceCierre) {
+      // Devolución de bobina completa: estado devuelto y metros 0
+      batch.set(
+        drRef,
+        {
+          metros: 0,
+          estado: "devuelto",
+          f_devolucion: serverTimestamp(),
+          guia_devolucion: guiaId,
+          usuario: datosDevolucion.usuario,
+        },
+        { merge: true }
+      );
+      toast.success(`♻️ Bobina ${datosDevolucion.drump} marcada como *devuelto* (0 m).`);
+      // Importante: no sumamos metros al almacén en este modo.
+      return;
+    }
 
-  // Modo “por metros”
-  const mDev = Number(datosDevolucion.metraje) || 0;
-  if (mDev > Number(datosBobina.metros || 0)) {
-    toast.error(`❌ No puedes devolver más de ${datosBobina.metros} metros.`);
-    throw new Error("Metros inválidos");
-  }
+    // Modo “por metros”
+    const mDev = Number(datosDevolucion.metraje) || 0;
+    if (mDev > Number(datosBobina.metros || 0)) {
+      toast.error(`❌ No puedes devolver más de ${datosBobina.metros} metros.`);
+      throw new Error("Metros inválidos");
+    }
 
-  const metrosRestantes = Number(datosBobina.metros || 0) - mDev;
+    const metrosRestantes = Number(datosBobina.metros || 0) - mDev;
 
-  if (metrosRestantes <= 0) {
-    batch.set(
-      drRef,
-      {
-        metros: 0,
-        estado: "devuelto",
-        f_devolucion: serverTimestamp(),
-        guia_devolucion: guiaId,
-        usuario: datosDevolucion.usuario,
-      },
-      { merge: true }
-    );
-    toast.success(`♻️ Bobina ${datosDevolucion.drump} marcada como *devuelto* (0 m).`);
-  } else {
-    batch.set(
-      drRef,
-      {
-        metros: metrosRestantes,
-        actualizadoPor: datosDevolucion.usuario,
-        actualizadoEn: serverTimestamp(),
-        guia_devolucion: guiaId,
-      },
-      { merge: true }
-    );
-    toast.success(`✅ Bobina actualizada: ${metrosRestantes} m restantes.`);
-  }
+    if (metrosRestantes <= 0) {
+      batch.set(
+        drRef,
+        {
+          metros: 0,
+          estado: "devuelto",
+          f_devolucion: serverTimestamp(),
+          guia_devolucion: guiaId,
+          usuario: datosDevolucion.usuario,
+        },
+        { merge: true }
+      );
+      toast.success(`♻️ Bobina ${datosDevolucion.drump} marcada como *devuelto* (0 m).`);
+    } else {
+      batch.set(
+        drRef,
+        {
+          metros: metrosRestantes,
+          actualizadoPor: datosDevolucion.usuario,
+          actualizadoEn: serverTimestamp(),
+          guia_devolucion: guiaId,
+        },
+        { merge: true }
+      );
+      toast.success(`✅ Bobina actualizada: ${metrosRestantes} m restantes.`);
+    }
 
-  // Sumar metros devueltos al almacén (solo en modo “por metros”)
-  if (mDev > 0) {
-    const bobinaAlmacenRef = doc(db, "materiales_stock", "bobina");
-    const snapAlm = await getDoc(bobinaAlmacenRef);
-    const actual = snapAlm.exists() ? Number(snapAlm.data().cantidad || 0) : 0;
-    batch.set(
-      bobinaAlmacenRef,
-      {
-        nombre: "bobina",
-        cantidad: actual + mDev,
-        actualizadoPor: datosDevolucion.usuario,
-        actualizadoEn: serverTimestamp(),
-      },
-      { merge: true }
-    );
-  }
-};
-
+    // Sumar metros devueltos al almacén (solo en modo “por metros”)
+    if (mDev > 0) {
+      const bobinaAlmacenRef = doc(db, "materiales_stock", "bobina");
+      const snapAlm = await getDoc(bobinaAlmacenRef);
+      const actual = snapAlm.exists() ? Number(snapAlm.data().cantidad || 0) : 0;
+      batch.set(
+        bobinaAlmacenRef,
+        {
+          nombre: "bobina",
+          cantidad: actual + mDev,
+          actualizadoPor: datosDevolucion.usuario,
+          actualizadoEn: serverTimestamp(),
+        },
+        { merge: true }
+      );
+    }
+  };
 
   /* ======= Registrar Devolución ======= */
   const handleRegistrarDevolucion = async () => {
@@ -590,30 +618,34 @@ if (datosDevolucion.tipo === "Residencial" && datosDevolucion.drump) {
       setUltimaGuia(guiaId);
 
       // Devolución completa de bobina residencial sin metros
-const forceCierreBobina =
-  datosDevolucion.tipo === "Residencial" &&
-  !!datosDevolucion.drump?.trim() &&
-  (Number(datosDevolucion.metraje) || 0) === 0;
+      const forceCierreBobina =
+        datosDevolucion.tipo === "Residencial" &&
+        !!datosDevolucion.drump?.trim() &&
+        (Number(datosDevolucion.metraje) || 0) === 0;
 
       const hayEquipos = datosDevolucion.equipos.length > 0;
-const hayMats = Object.values(materialesDevueltos).some((v) => Number(v) > 0);
-const hayMetros = Number(datosDevolucion.metraje) > 0;
+      const hayMats = Object.values(materialesDevueltos).some((v) => Number(v) > 0);
+      const hayMetros = Number(datosDevolucion.metraje) > 0;
 
-if (!hayEquipos && !hayMats && !hayMetros && !forceCierreBobina) {
-  toast.error("⚠️ Debes devolver al menos un equipo, material, metros de bobina o una bobina completa (DRUMP).");
-  setProcesando(false);
-  toast.dismiss(toastId);
-  return;
-}
+      if (!hayEquipos && !hayMats && !hayMetros && !forceCierreBobina) {
+        toast.error("⚠️ Debes devolver al menos un equipo, material, metros de bobina o una bobina completa (DRUMP).");
+        setProcesando(false);
+        toast.dismiss(toastId);
+        return;
+      }
 
+      // 1) Equipos -> a almacén + guia_devolucion (optimizado)
+      if (datosDevolucion.equipos.length > 0) {
+        const results = await Promise.all(
+          datosDevolucion.equipos.map((eq) => findEquipoPorSN(db, eq.SN))
+        );
 
-      // 1) Equipos -> a almacén + guia_devolucion
-      for (const eq of datosDevolucion.equipos) {
-        const snap = await getDocs(collection(db, "equipos"));
-        const d = snap.docs.find((x) => x.data().SN === eq.SN);
-        if (d) {
+        results.forEach((found, idx) => {
+          const eq = datosDevolucion.equipos[idx];
+          if (!found) return;
+
           batch.set(
-            doc(db, "equipos", d.id),
+            found.ref,
             {
               estado: "almacen",
               ubicacion: "almacen",
@@ -625,7 +657,7 @@ if (!hayEquipos && !hayMats && !hayMetros && !forceCierreBobina) {
             { merge: true }
           );
           batch.delete(doc(db, `cuadrillas/${datosDevolucion.cuadrillaId}/stock_equipos`, eq.SN));
-        }
+        });
       }
 
       // 2) Materiales -> suman almacén y restan cuadrilla
@@ -664,9 +696,8 @@ if (!hayEquipos && !hayMats && !hayMetros && !forceCierreBobina) {
 
       // 3) DRUMP / Metros
       if (datosDevolucion.tipo === "Residencial" && datosDevolucion.drump && (hayMetros || forceCierreBobina)) {
-  await procesarDevolucionBobinaResidencial(batch, guiaId, { forceCierre: forceCierreBobina });
-}
-
+        await procesarDevolucionBobinaResidencial(batch, guiaId, { forceCierre: forceCierreBobina });
+      }
 
       if (datosDevolucion.tipo === "Condominio" && Number(datosDevolucion.metraje) > 0) {
         const metros = Number(datosDevolucion.metraje) || 0;
@@ -706,15 +737,14 @@ if (!hayEquipos && !hayMats && !hayMetros && !forceCierreBobina) {
 
       // 4) Guardar guía
       const datosFinal = {
-  ...datosDevolucion,
-  guiaId,
-  materiales: materialesDevueltos,
-  tecnicosUID: tecnicos,
-  f_registro: serverTimestamp(),
-  bobinaCompletaDevuelta: forceCierreBobina || false,
-};
-await addDoc(collection(db, "guias_devolucion"), datosFinal);
-
+        ...datosDevolucion,
+        guiaId,
+        materiales: materialesDevueltos,
+        tecnicosUID: tecnicos,
+        f_registro: serverTimestamp(),
+        bobinaCompletaDevuelta: forceCierreBobina || false,
+      };
+      await addDoc(collection(db, "guias_devolucion"), datosFinal);
 
       // 5) PDF + Notificación
       const urlComprobante = await generarPDFDevolucion(guiaId, datosFinal);
@@ -736,7 +766,6 @@ await addDoc(collection(db, "guias_devolucion"), datosFinal);
           equipos: datosFinal.equipos,
           materiales: datosFinal.materiales,
           drump: datosFinal.drump || "",
-          
           metraje: datosFinal.metraje || 0,
         },
         visto: false,
@@ -779,24 +808,23 @@ await addDoc(collection(db, "guias_devolucion"), datosFinal);
 
   /* ======= Computados para previsualización ======= */
   // Computados para previsualización
-const totalMateriales = Object.values(materialesDevueltos || {}).reduce(
-  (a, b) => a + (Number(b) || 0), 0
-);
-
-// Permite previsualizar si:
-// - hay equipos, o
-// - hay materiales, o
-// - hay metraje > 0, o
-// - hay DRUMP residencial (aunque metraje sea 0)
-const puedePrevisualizar =
-  !!datosDevolucion.cuadrillaId &&
-  (
-    listaEquipos.length > 0 ||
-    totalMateriales > 0 ||
-    Number(datosDevolucion.metraje) > 0 ||
-    (datosDevolucion.tipo === "Residencial" && !!datosDevolucion.drump?.trim())
+  const totalMateriales = Object.values(materialesDevueltos || {}).reduce(
+    (a, b) => a + (Number(b) || 0), 0
   );
 
+  // Permite previsualizar si:
+  // - hay equipos, o
+  // - hay materiales, o
+  // - hay metraje > 0, o
+  // - hay DRUMP residencial (aunque metraje sea 0)
+  const puedePrevisualizar =
+    !!datosDevolucion.cuadrillaId &&
+    (
+      listaEquipos.length > 0 ||
+      totalMateriales > 0 ||
+      Number(datosDevolucion.metraje) > 0 ||
+      (datosDevolucion.tipo === "Residencial" && !!datosDevolucion.drump?.trim())
+    );
 
   /* =======================
      UI

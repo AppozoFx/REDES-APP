@@ -206,7 +206,7 @@ export default function LayoutApp({ children }) {
       roles: ["Almacén", "TI"],
     },
     {
-      href: "/liquidacion/liquidacion_detalle",
+      href: "/liquidacion/liquidacion-detalle",
       label: "Liquidación Detalle",
       icon: I(ClipboardList, 18), // usa el icono que prefieras
       roles: ["TI", "Gerencia"],

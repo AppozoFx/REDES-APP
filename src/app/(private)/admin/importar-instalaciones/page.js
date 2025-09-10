@@ -10,19 +10,20 @@ import { collection, getDocs, addDoc, serverTimestamp } from "firebase/firestore
 
 /* ===========================
    CONFIG / CONSTANTES
-   =========================== */
+=========================== */
 const rolesPermitidos = ["TI", "Gerencia", "Almacén", "Gestor"];
 const MAX_FILE_MB = 10;
 const PREVIEW_PAGE_SIZE = 50;
 
 /* ===========================
    UTILIDADES (fuera del comp.)
-   =========================== */
+=========================== */
 const REGEX_HORA_EN_CAMINO =
   /Fecha:\s*(\d{2}\/\d{2}\/\d{4})\s+(\d{2}:\d{2}:\d{2})\s+Estado:\s*En camino/g;
 const REGEX_CUADRILLA = /^K\s*(\d+)/i;
 const REGEX_CANT_MESH = /Cantidad de Mesh:\s*(\d+)/;
-const REGEX_BOX_COMODATO = /(\d+)\s*WIN BOX \(EN COMODATO\)/g;
+const REGEX_BOX_COMODATO = /(\d+)\s*WIN BOX \(EN COMODATO\)/gi;
+const REGEX_BOX_ADICIONAL = /\+\s*(\d+)\s*WIN BOX/gi;
 
 const extraerHora = (valor) => {
   try {
@@ -55,10 +56,15 @@ const extraerHoraEnCaminoDesdeTexto = (texto) => {
 };
 
 const extraerDatosIdenServi = (texto) => {
-  const datosExtra = {};
+  const datosExtra = {
+    cantMESHwin: "0",
+    cantFONOwin: "0",
+    cantBOXwin: "0",
+  };
+
   if (!texto) return datosExtra;
 
-  if (texto.includes("INTERNETGAMER 350 Mbps")) {
+  if (texto.includes("INTERNETGAMER")) {
     datosExtra.planGamer = "GAMER";
     datosExtra.cat6 = "1";
   }
@@ -69,21 +75,31 @@ const extraerDatosIdenServi = (texto) => {
     datosExtra.servicioCableadoMesh = "SERVICIO CABLEADO DE MESH";
   }
 
-  const matchMesh = texto.match(REGEX_CANT_MESH);
+  // Cantidad de Mesh
+  const matchMesh = texto.match(/Cantidad de Mesh:\s*(\d+)/i);
   if (matchMesh) datosExtra.cantMESHwin = matchMesh[1];
 
+  // FONO WIN
   if (texto.includes("FONO WIN 100")) datosExtra.cantFONOwin = "1";
 
   // Cantidad total de BOX
   let totalBox = 0;
-  const comodatoMatches = texto.matchAll(REGEX_BOX_COMODATO);
-  for (const m of comodatoMatches) totalBox += parseInt(m[1], 10) || 0;
-  const adicionales = (texto.match(/\+\s*1\s*WIN BOX/g) || []).length;
-  totalBox += adicionales;
-  if (totalBox > 0) datosExtra.cantBOXwin = String(totalBox);
+
+  // Comodato
+  for (const m of texto.matchAll(REGEX_BOX_COMODATO)) {
+    totalBox += parseInt(m[1], 10) || 0;
+  }
+
+  // Adicionales con "+ n WIN BOX"
+  for (const m of texto.matchAll(REGEX_BOX_ADICIONAL)) {
+    totalBox += parseInt(m[1], 10) || 0;
+  }
+
+  datosExtra.cantBOXwin = String(totalBox);
 
   return datosExtra;
 };
+
 
 const parseFecha = (excelDate) => {
   if (typeof excelDate === "number") {
@@ -125,14 +141,21 @@ const obtenerCodigoCuadrilla = (nombreCompleto) => {
 
 /* ===========================
    COMPONENTE
-   =========================== */
+=========================== */
 export default function ImportarInstalaciones() {
   const { userData, cargando } = useAuth();
 
   const [excelData, setExcelData] = useState([]);
   const [archivoNombre, setArchivoNombre] = useState("");
   const [archivoPesoMB, setArchivoPesoMB] = useState(0);
+
+  // Landing breve
+  const [landing, setLanding] = useState(true);
+
+  // Overlay con barra indeterminada (sin precálculo)
   const [enviando, setEnviando] = useState(false);
+  const [progress, setProgress] = useState(0); // barra visual
+
   const [resumen, setResumen] = useState(null);
   const [cuadrillasMap, setCuadrillasMap] = useState(new Map());
   const [page, setPage] = useState(1);
@@ -161,13 +184,34 @@ export default function ImportarInstalaciones() {
   // Cargar cuadrillas y mapear por ID
   useEffect(() => {
     const cargarCuadrillas = async () => {
-      const snap = await getDocs(collection(db, "cuadrillas"));
-      const map = new Map();
-      snap.docs.forEach((doc) => map.set(doc.id, { id: doc.id, ...doc.data() }));
-      setCuadrillasMap(map);
+      try {
+        const snap = await getDocs(collection(db, "cuadrillas"));
+        const map = new Map();
+        snap.docs.forEach((doc) => map.set(doc.id, { id: doc.id, ...doc.data() }));
+        setCuadrillasMap(map);
+      } finally {
+        setTimeout(() => setLanding(false), 400);
+      }
     };
     cargarCuadrillas();
   }, []);
+
+  // Barra indeterminada: avanza sola hasta 95% mientras {enviando}
+  useEffect(() => {
+    if (!enviando) {
+      setProgress(0);
+      return;
+    }
+    let mounted = true;
+    let id = setInterval(() => {
+      if (!mounted) return;
+      setProgress((p) => (p < 95 ? p + 1 : 95));
+    }, 80); // rápido y suave
+    return () => {
+      mounted = false;
+      clearInterval(id);
+    };
+  }, [enviando]);
 
   // Drag & drop básico
   useEffect(() => {
@@ -303,7 +347,7 @@ export default function ImportarInstalaciones() {
   };
 
   const enviarAlServidor = async () => {
-    setEnviando(true); // 🔒 activa overlay
+    setEnviando(true); // 🔒 overlay + barra
     const res = await fetch(
       "https://importarinstalaciones-p7c2u2btmq-uc.a.run.app",
       {
@@ -316,10 +360,13 @@ export default function ImportarInstalaciones() {
       }
     );
 
+    // Empujar la barra a 100% al terminar
+    setProgress(100);
+
     const data = await res.json();
 
     if (data.success) {
-      setResumen(data);
+      setResumen(data); // ⬅️ Resumen exactamente como lo entrega tu backend
       toast.success("✅ Importación completada");
       setExcelData([]);
 
@@ -344,7 +391,8 @@ export default function ImportarInstalaciones() {
       toast.error(data.message || "❌ Error al importar");
     }
 
-    setEnviando(false); // 🔓 desactiva overlay
+    // Cerrar overlay con pequeña pausa para que se vea el 100%
+    setTimeout(() => setEnviando(false), 300);
     return data.success;
   };
 
@@ -361,21 +409,42 @@ export default function ImportarInstalaciones() {
 
   return (
     <div className="relative p-6 w-full min-h-screen bg-slate-50 dark:bg-[#0f172a]">
-      {/* 🔒 Overlay de bloqueo de página */}
+      {/* ============== LANDING / SPLASH (corto) ============== */}
+      {landing && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-gradient-to-b from-white to-slate-100 dark:from-slate-900 dark:to-slate-950">
+          <div className="w-[420px] max-w-[92vw] rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 bg-white/90 dark:bg-slate-900/80 backdrop-blur p-8 text-center">
+            <div className="mx-auto mb-5 h-14 w-14 rounded-full border-4 border-slate-300 dark:border-slate-700 border-t-transparent animate-spin" />
+            <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100">
+              Cargando Importador de Instalaciones…
+            </h2>
+            <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+              Preparando recursos y cuadrillas. Un momento por favor.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* ============== OVERLAY DE PROCESO (barra indeterminada) ============== */}
       {enviando && (
         <div
-          className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm"
+          className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm"
           aria-busy="true"
           aria-live="polite"
         >
-          <div className="w-[380px] max-w-[92vw] rounded-2xl bg-white dark:bg-slate-800 shadow-2xl border border-slate-200 dark:border-slate-700 p-6 text-center">
-            <div className="mx-auto mb-4 h-12 w-12 rounded-full border-4 border-slate-300 dark:border-slate-600 border-t-transparent animate-spin" />
-            <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
+          <div className="w-[420px] max-w-[92vw] rounded-2xl bg-white dark:bg-slate-800 shadow-2xl border border-slate-200 dark:border-slate-700 p-6">
+            <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100 mb-2">
               Importando instalaciones…
             </h3>
-            <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+            <p className="text-sm text-slate-600 dark:text-slate-300 mb-4">
               No cierres esta ventana. Estamos procesando {totalRegistros} registros.
             </p>
+
+            <div className="w-full h-2 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-[#30518c] transition-all"
+                style={{ width: `${progress}%` }}
+              />
+            </div>
           </div>
         </div>
       )}
@@ -403,7 +472,7 @@ export default function ImportarInstalaciones() {
                 Suelta aquí tu archivo .xlsx
               </p>
               <p className="text-xs text-slate-500 dark:text-slate-400 mb-4">
-                Tamaño máx.: {MAX_FILE_MB} MB
+                Tamaño máx.: {MAX_FILE_MB} MB
               </p>
 
               <div className="flex items-center justify-center gap-3">
@@ -437,7 +506,7 @@ export default function ImportarInstalaciones() {
                     📄 {archivoNombre}
                   </span>
                   <span className="text-xs text-slate-500 dark:text-slate-300">
-                    {archivoPesoMB} MB
+                    {archivoPesoMB} MB
                   </span>
                 </div>
               )}
@@ -474,9 +543,9 @@ export default function ImportarInstalaciones() {
                           className="px-4 py-1 rounded bg-blue-600 text-white text-sm hover:bg-blue-700 disabled:opacity-60"
                           onClick={async () => {
                             toast.dismiss(t.id);
-                            const toastId = toast.loading("Importando instalaciones...");
+                            const toastId = toast.loading("Importando instalaciones…");
                             try {
-                              await enviarAlServidor(); // setEnviando(true) activa overlay
+                              await enviarAlServidor(); // overlay + barra indeterminada
                               toast.dismiss(toastId);
                             } catch (error) {
                               toast.error("❌ Error al importar", { id: toastId });
@@ -494,20 +563,10 @@ export default function ImportarInstalaciones() {
               >
                 {enviando ? "Importando…" : "Importar instalaciones"}
               </button>
-
-              {/* (Opcional) Plantilla Excel
-              <a
-                href="TU_URL_DE_PLANTILLA"
-                target="_blank"
-                className="text-sm underline text-slate-600 dark:text-slate-300"
-                rel="noreferrer"
-              >
-                Descargar plantilla
-              </a> */}
             </div>
           </div>
 
-          {/* Resumen */}
+          {/* Resumen (tal cual backend) */}
           {resumen && (
             <div className="px-6 py-4 bg-slate-50 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-700">
               <p className="font-semibold text-slate-800 dark:text-slate-100 mb-2">
@@ -597,7 +656,10 @@ export default function ImportarInstalaciones() {
                   </thead>
                   <tbody className="text-slate-800 dark:text-slate-100">
                     {previewRows.map((row, i) => (
-                      <tr key={`${start + i}-${row.id}`} className="even:bg-slate-50/60 dark:even:bg-slate-800/50">
+                      <tr
+                        key={`${start + i}-${row.id}`}
+                        className="even:bg-slate-50/60 dark:even:bg-slate-800/50"
+                      >
                         <td className="px-3 py-2 border-t border-slate-200 dark:border-slate-700">
                           {row.cliente}
                         </td>
