@@ -13,7 +13,11 @@ import dayjs from "dayjs";
 import customParseFormat from "dayjs/plugin/customParseFormat";
 import "dayjs/locale/es";
 import toast from "react-hot-toast";
-import { useAuth } from "@/app/context/AuthContext"; // ajusta si tu ruta difiere
+import { useAuth } from "@/app/context/AuthContext";
+
+// NUEVO: XLSX + file-saver
+import * as XLSX from "xlsx";
+import { saveAs } from "file-saver";
 
 dayjs.extend(customParseFormat);
 dayjs.locale("es");
@@ -68,7 +72,7 @@ const tieneDatosLiq = (row) => {
    Página
 ========================= */
 export default function LiquidacionMaterialesPage() {
-  const { userData } = useAuth(); // { uid, displayName, email, ... }
+  const { userData } = useAuth();
 
   const [cargando, setCargando] = useState(false);
   const [insts, setInsts] = useState([]);
@@ -82,6 +86,10 @@ export default function LiquidacionMaterialesPage() {
     busqueda: "",
     estado: "todos", // "todos" | "pendientes" | "liquidados"
   });
+
+  // Ordenación
+  const [sortKey, setSortKey] = useState("fecha"); // 'estado'|'fecha'|'cuadrilla'|'codigo'|'cliente'
+  const [sortDir, setSortDir] = useState("desc"); // 'asc' | 'desc'
 
   // Edición / liquidación por fila
   const [formFila, setFormFila] = useState({});
@@ -162,6 +170,77 @@ export default function LiquidacionMaterialesPage() {
   }, [insts, filtros]);
 
   /* =========================
+     Indicadores (globales y de la vista)
+  ========================= */
+  const indicadoresGlobal = useMemo(() => {
+    const total = insts.length;
+    let liq = 0;
+    for (const r of insts) if (tieneDatosLiq(r)) liq++;
+    const pend = total - liq;
+    return { total, liq, pend };
+  }, [insts]);
+
+  const indicadoresVista = useMemo(() => {
+    const total = instsFiltradas.length;
+    let liq = 0;
+    for (const r of instsFiltradas) if (tieneDatosLiq(r)) liq++;
+    const pend = total - liq;
+    return { total, liq, pend };
+  }, [instsFiltradas]);
+
+  /* =========================
+     Ordenación (sobre el resultado ya filtrado)
+  ========================= */
+  const sortedRows = useMemo(() => {
+    const list = [...instsFiltradas];
+    const dir = sortDir === "asc" ? 1 : -1;
+
+    const getComparable = (row, key) => {
+      if (key === "estado") {
+        return tieneDatosLiq(row) ? 1 : 0;
+      }
+      if (key === "fecha") {
+        const f = convFecha(row.fechaInstalacion);
+        return f ? f.getTime() : 0;
+      }
+      if (key === "cuadrilla") {
+        return norm(row.cuadrillaNombre || "");
+      }
+      if (key === "codigo") {
+        return norm(row.codigoCliente || "");
+      }
+      if (key === "cliente") {
+        return norm(row.cliente || "");
+      }
+      return "";
+    };
+
+    list.sort((a, b) => {
+      const A = getComparable(a, sortKey);
+      const B = getComparable(b, sortKey);
+      if (A < B) return -1 * dir;
+      if (A > B) return 1 * dir;
+      const aT = convFecha(a.fechaInstalacion)?.getTime() ?? 0;
+      const bT = convFecha(b.fechaInstalacion)?.getTime() ?? 0;
+      return bT - aT;
+    });
+
+    return list;
+  }, [instsFiltradas, sortKey, sortDir]);
+
+  const toggleSort = (key) => {
+    if (sortKey === key) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(key);
+      setSortDir("asc");
+    }
+  };
+
+  const sortIcon = (key) =>
+    sortKey !== key ? "↕" : sortDir === "asc" ? "▲" : "▼";
+
+  /* =========================
      Handlers UI
   ========================= */
   const onChangeFiltro = (e) => {
@@ -188,12 +267,46 @@ export default function LiquidacionMaterialesPage() {
   };
 
   /* =========================
-     Transacción de guardado (actualiza el doc) con DESCUENTO DIFERENCIAL
+     Exportar XLSX (filtrado + ordenado)
+     Columnas: Estado, Fecha, Cuadrilla, Código, Cliente, Acta
+  ========================= */
+  const exportXLSX = () => {
+    const headers = ["Estado", "Fecha", "Cuadrilla", "Código", "Cliente", "Acta"];
+    const rows = sortedRows.map((l) => {
+      const estado = tieneDatosLiq(l) ? "Liquidado" : "Pendiente";
+      const fecha = fmt(convFecha(l.fechaInstalacion));
+      const cuadrilla = l.cuadrillaNombre || "-";
+      const codigo = l.codigoCliente || "-";
+      const cliente = l.cliente || "-";
+      const acta = (l.acta || "").trim() || "-";
+      return [estado, fecha, cuadrilla, codigo, cliente, acta];
+    });
+
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+
+    // Auto width sencillo
+    const colWidths = headers.map((h, i) => {
+      const maxLen = Math.max(
+        h.length,
+        ...rows.map((r) => String(r[i] ?? "").length)
+      );
+      return { wch: Math.min(Math.max(maxLen + 2, 10), 40) };
+    });
+    ws["!cols"] = colWidths;
+
+    XLSX.utils.book_append_sheet(wb, ws, "Liquidación");
+    const wbout = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+    const blob = new Blob([wbout], { type: "application/octet-stream" });
+    saveAs(blob, `liquidacion-materiales_${dayjs().format("YYYYMMDD_HHmmss")}.xlsx`);
+  };
+
+  /* =========================
+     Transacción de guardado (LOGICA ORIGINAL)
   ========================= */
   const guardarLiquidacion = async (row) => {
     const f = formFila[row.id] || {};
 
-    // 1) Consolidar "nuevo" valor: si input vacío, conservar existente
     const actaInput = (f.acta ?? "").toString().trim();
     const rotuloInput = (f.rotulo ?? "").toString().trim();
     const metrajeInput = f.metraje ?? "";
@@ -217,11 +330,9 @@ export default function LiquidacionMaterialesPage() {
     const newHebi  = soloRes ? Math.max(0, toInt(hebiInput  !== "" ? hebiInput  : prevHebi )) : 0;
     const newClev  = soloRes ? Math.max(0, toInt(clevInput  !== "" ? clevInput  : prevClev )) : 0;
 
-    // 2) Validaciones mínimas
     if (!acta)  return toast.error("Ingresa/scanea el Nº de ACTA.");
     if (!rotulo) return toast.error("Ingresa el rótulo NAP/CTO.");
 
-    // 3) Calcular DELTAS (solo se descuentan positivos)
     const dMetraje = Math.max(0, newMetraje - prevMetraje);
     const dTempl   = Math.max(0, newTempl   - prevTempl);
     const dHebi    = Math.max(0, newHebi    - prevHebi);
@@ -237,7 +348,6 @@ export default function LiquidacionMaterialesPage() {
     setGuardandoId(row.id);
     try {
       await runTransaction(db, async (tx) => {
-        // 4) Preparar refs solo para lo que tenga delta > 0
         const refsOpt = [];
         if (dMetraje > 0) {
           refsOpt.push(doc(db, "cuadrillas", cuadId, "stock_materiales", "bobina"));
@@ -248,7 +358,6 @@ export default function LiquidacionMaterialesPage() {
           if (dClev  > 0) refsOpt.push(doc(db, "cuadrillas", cuadId, "stock_materiales", "clevis"));
         }
 
-        // 5) Leer cantidades y validar stock suficiente SOLO para las diferencias
         const snaps = await Promise.all(refsOpt.map((r) => tx.get(r)));
         const getCant = (id) => toFloat(snaps.find((s) => s.ref.id === id)?.data()?.cantidad || 0);
 
@@ -274,7 +383,6 @@ export default function LiquidacionMaterialesPage() {
 
         if (faltas.length) throw new Error("Stock insuficiente: " + faltas.join(" | "));
 
-        // 6) Descontar SOLO las diferencias positivas
         const marca = {
           actualizadoEn: serverTimestamp(),
           actualizadoPor: userData?.displayName || userData?.email || "Sistema",
@@ -302,12 +410,11 @@ export default function LiquidacionMaterialesPage() {
           }
         }
 
-        // 7) Actualizar el documento de instalación con los NUEVOS totales
         const instRef = doc(db, "liquidacion_instalaciones", row.id);
         tx.update(instRef, {
-          acta,                         // "005-0024274"
-          rotuloNapCto: rotulo,         // texto
-          metraje_instalado: newMetraje,// número (m)
+          acta,
+          rotuloNapCto: rotulo,
+          metraje_instalado: newMetraje,
           templadores: soloRes ? newTempl : 0,
           hebillas:    soloRes ? newHebi  : 0,
           clevis:      soloRes ? newClev  : 0,
@@ -317,7 +424,7 @@ export default function LiquidacionMaterialesPage() {
       });
 
       toast.success(tieneDatosLiq(row) ? "✅ Actualización realizada (diferencia aplicada)." : "✅ Liquidación registrada.");
-      await obtenerInsts(); // refrescar para ver chips/estado
+      await obtenerInsts();
       setFormFila((p) => {
         const cp = { ...p };
         delete cp[row.id];
@@ -336,18 +443,49 @@ export default function LiquidacionMaterialesPage() {
   ========================= */
   return (
     <div className="p-4">
-      <div className="mb-4 flex items-center justify-between">
+      <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
         <h1 className="text-xl md:text-2xl font-bold">Liquidación de Materiales por Instalación</h1>
-        <button
-          onClick={() => scanRef.current?.focus()}
-          className="text-sm px-3 py-1.5 rounded bg-slate-800 text-white hover:bg-slate-900"
-          title="Ir al campo de escaneo"
-        >
-          ⌾ Foco en ACTA
-        </button>
+
+        <div className="flex items-center gap-2">
+          <button
+            onClick={exportXLSX}
+            className="text-sm px-3 py-1.5 rounded bg-emerald-600 text-white hover:bg-emerald-700"
+            title="Exportar columnas: Estado, Fecha, Cuadrilla, Código, Cliente, Acta"
+          >
+            ⭳ Exportar XLSX
+          </button>
+          <button
+            onClick={() => scanRef.current?.focus()}
+            className="text-sm px-3 py-1.5 rounded bg-slate-800 text-white hover:bg-slate-900"
+            title="Ir al campo de escaneo"
+          >
+            ⌾ Foco en ACTA
+          </button>
+        </div>
       </div>
 
-      {/* Filtros (sin R/C) + toggle estado */}
+      {/* Indicadores */}
+      <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        
+
+        {/* Vista (filtrados) */}
+        <div className="rounded-lg border p-3 bg-white">
+          <div className="text-xs text-gray-500 mb-1">Totales</div>
+          <div className="flex items-center gap-3">
+            <span className="px-2 py-0.5 rounded-full text-xs bg-slate-100 text-slate-700 border">
+              Total: <strong>{indicadoresVista.total}</strong>
+            </span>
+            <span className="px-2 py-0.5 rounded-full text-xs bg-green-100 text-green-800 border border-green-200">
+              Liquidados: <strong>{indicadoresVista.liq}</strong>
+            </span>
+            <span className="px-2 py-0.5 rounded-full text-xs bg-amber-100 text-amber-800 border border-amber-200">
+              Pendientes: <strong>{indicadoresVista.pend}</strong>
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* Filtros */}
       <div className="mb-4 grid gap-3 md:grid-cols-2 lg:grid-cols-5">
         <div className="flex flex-col">
           <label className="text-sm font-medium text-gray-700">Mes</label>
@@ -422,11 +560,42 @@ export default function LiquidacionMaterialesPage() {
         <table className="min-w-full text-sm">
           <thead className="bg-gray-100 sticky top-0 z-10">
             <tr className="text-center text-gray-700 font-semibold">
-              <th className="p-2 border w-32">Estado</th>
-              <th className="p-2 border w-36">Fecha</th>
-              <th className="p-2 border w-48">Cuadrilla</th>
-              <th className="p-2 border w-28">Código</th>
-              <th className="p-2 border w-56">Cliente</th>
+              <th
+                className="p-2 border w-32 cursor-pointer select-none hover:bg-gray-200"
+                onClick={() => toggleSort("estado")}
+                title="Ordenar por Estado"
+              >
+                Estado <span className="text-xs opacity-70">{sortIcon("estado")}</span>
+              </th>
+              <th
+                className="p-2 border w-36 cursor-pointer select-none hover:bg-gray-200"
+                onClick={() => toggleSort("fecha")}
+                title="Ordenar por Fecha"
+              >
+                Fecha <span className="text-xs opacity-70">{sortIcon("fecha")}</span>
+              </th>
+              <th
+                className="p-2 border w-48 cursor-pointer select-none hover:bg-gray-200"
+                onClick={() => toggleSort("cuadrilla")}
+                title="Ordenar por Cuadrilla"
+              >
+                Cuadrilla <span className="text-xs opacity-70">{sortIcon("cuadrilla")}</span>
+              </th>
+              <th
+                className="p-2 border w-28 cursor-pointer select-none hover:bg-gray-200"
+                onClick={() => toggleSort("codigo")}
+                title="Ordenar por Código"
+              >
+                Código <span className="text-xs opacity-70">{sortIcon("codigo")}</span>
+              </th>
+              <th
+                className="p-2 border w-56 cursor-pointer select-none hover:bg-gray-200"
+                onClick={() => toggleSort("cliente")}
+                title="Ordenar por Cliente"
+              >
+                Cliente <span className="text-xs opacity-70">{sortIcon("cliente")}</span>
+              </th>
+
               <th className="p-2 border w-40">SN ONT</th>
               <th className="p-2 border w-60">SN MESH</th>
               <th className="p-2 border w-60">SN BOX</th>
@@ -439,12 +608,12 @@ export default function LiquidacionMaterialesPage() {
               <tr>
                 <td colSpan={10} className="p-6 text-center text-gray-500">Cargando…</td>
               </tr>
-            ) : instsFiltradas.length === 0 ? (
+            ) : sortedRows.length === 0 ? (
               <tr>
                 <td colSpan={10} className="p-6 text-center text-gray-500">No hay registros con los filtros actuales.</td>
               </tr>
             ) : (
-              instsFiltradas.map((l) => {
+              sortedRows.map((l) => {
                 const f = convFecha(l.fechaInstalacion);
                 const v = formFila[l.id] || {};
                 const mesh = Array.isArray(l.snMESH) ? l.snMESH.filter(Boolean) : [];
@@ -548,7 +717,6 @@ export default function LiquidacionMaterialesPage() {
 
                       {/* Formulario de liquidación / actualización */}
                       <div className="grid gap-2 md:grid-cols-6">
-                        {/* ACTA con autoguionado; precarga desde doc si no hay edición */}
                         <input
                           ref={scanRef}
                           type="text"
@@ -593,7 +761,6 @@ export default function LiquidacionMaterialesPage() {
                           title="Metraje instalado (descuenta bobina)"
                         />
 
-                        {/* Solo para RESIDENCIAL */}
                         {esResidencial(l) && (
                           <>
                             <input
@@ -636,7 +803,6 @@ export default function LiquidacionMaterialesPage() {
                         )}
 
                         <div className="md:col-span-6 flex items-center justify-between">
-                          {/* Resumen faltante/ok (simple) */}
                           <div className="text-[11px] text-gray-600">
                             {(() => {
                               const faltan = [];
