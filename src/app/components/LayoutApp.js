@@ -15,7 +15,7 @@ import {
   FileChartColumn, ChevronDown, Archive as IconoGrupoAlmacen, UsersRound as IconoGrupoAdministracion,
   DollarSign as IconoGrupoLiquidacion, Building as IconoGrupoInstalaciones, ListChecks as IconoGrupoAsistencia,
   Wrench as IconoGrupoConfiguracion, UploadCloud, Home,
-  Boxes 
+  Boxes, ShieldCheck
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import Notificaciones from "@/app/components/Notificaciones";
@@ -181,6 +181,16 @@ export default function LayoutApp({ children }) {
       { href: "/instalaciones/gestor", label: "Llamadas INCONCERT", icon: I(PhoneCall), roles: ["Gestor"] }
     ]
   },
+  {
+  id: "garantias",
+  label: "Garantías",
+  icon: I(ShieldCheck, 20),
+  roles: ["Gestor","Gerencia","Almacén","TI"],
+  subItems: [
+    { href: "/garantias/dashboard",  label: "Dashboard",  icon: I(LayoutDashboard),  roles: ["Gestor","Gerencia","Almacén","TI"] },
+    { href: "/garantias/garantias",  label: "Garantías", icon: I(ClipboardList),   roles: ["Gestor","Gerencia","Almacén","TI"] }
+  ]
+},
   {
     id: "asistencia",
     label: "Asistencia",

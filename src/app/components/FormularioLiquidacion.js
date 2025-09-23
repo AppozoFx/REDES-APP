@@ -2,9 +2,6 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import jsPDF from "jspdf";
-import autoTable from "jspdf-autotable";
-import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import {
   addDoc,
   collection,
@@ -18,7 +15,7 @@ import {
   where,
 } from "firebase/firestore";
 
-import { db, storage } from "@/firebaseConfig";
+import { db } from "@/firebaseConfig";
 import { Input } from "@/app/components/ui/input";
 import { Textarea } from "@/app/components/ui/textarea";
 import { Button } from "@/app/components/ui/button";
@@ -269,101 +266,7 @@ export default function FormularioLiquidacion({ instalacion, onFinalizar, onCanc
     }
   };
 
-  /* -------------------------------- PDF + Storage ------------------------------- */
-  const generarComprobantePDF = async () => {
-    const docPDF = new jsPDF();
-
-    // (nombres mostrados en PDF; no necesarios en UI)
-    const obtenerNombreUsuario = async (uid) => {
-      if (!uid || typeof uid !== "string") return "No asignado";
-      try {
-        const qUsers = query(collection(db, "usuarios"), where("__name__", "==", uid.trim()));
-        const snap = await getDocs(qUsers);
-        if (!snap.empty) {
-          const d = snap.docs[0].data();
-          const nombre = `${d.nombres || ""} ${d.apellidos || ""}`.trim();
-          return nombre || "Nombre incompleto";
-        }
-        return "Usuario no encontrado";
-      } catch {
-        return "Error al buscar usuario";
-      }
-    };
-
-    const nombreCoordinador = await obtenerNombreUsuario(instalacion.coordinadorCuadrilla);
-    const nombreGestorCuadrilla = await obtenerNombreUsuario(instalacion.gestorCuadrilla);
-
-    docPDF.setFontSize(14);
-    docPDF.text("Comprobante de Liquidación", 20, 20);
-
-    docPDF.setFontSize(10);
-    docPDF.text(`Cliente: ${instalacion.cliente}`, 20, 30);
-    docPDF.text(`Dirección: ${instalacion.direccion}`, 20, 36);
-    docPDF.text(`Código Pedido: ${instalacion.codigoCliente}`, 20, 42);
-    docPDF.text(`Fecha Liquidación: ${new Date().toLocaleDateString()}`, 20, 48);
-
-    const datosExtra = [
-      ["Cuadrilla", instalacion.cuadrillaNombre || "N/A"],
-      ["Día", instalacion.dia || "N/A"],
-      ["Documento", instalacion.documento || "N/A"],
-      ["Plan", instalacion.plan || "N/A"],
-      ["Teléfono", instalacion.telefono || "N/A"],
-      ["Tipo Cuadrilla", instalacion.tipoCuadrilla || "N/A"],
-      ["Tipo Servicio", instalacion.tipoServicio || "N/A"],
-      ["Coordinador", nombreCoordinador],
-      ["Gestor Cuadrilla", nombreGestorCuadrilla],
-      ["Tramo", instalacion.tramo || "N/A"],
-      ["Hora En Camino", instalacion.horaEnCamino || "N/A"],
-      ["Hora Inicio", instalacion.horaInicio || "N/A"],
-      ["Hora Fin", instalacion.horaFin || "N/A"],
-      ["Inicio Llamada", instalacion.horaInicioLlamada || "N/A"],
-      ["Fin Llamada", instalacion.horaFinLlamada || "N/A"],
-      ["Estado Llamada", instalacion.estadoLlamada || "N/A"],
-      ["Obs. Llamada", instalacion.observacionLlamada || "N/A"],
-      [
-        "Coordenadas",
-        `Lat: ${instalacion.coordenadas?.lat || 0} / Lng: ${instalacion.coordenadas?.lng || 0}`,
-      ],
-    ];
-    autoTable(docPDF, { startY: 55, head: [["Dato", "Valor"]], body: datosExtra });
-
-    autoTable(docPDF, {
-      startY: docPDF.lastAutoTable.finalY + 10,
-      head: [["Tipo", "Serial"]],
-      body: [
-        ["ONT", formulario.snONT],
-        ...(formulario.snMESH || []).map((sn) => ["MESH", sn]),
-        ...(formulario.snBOX || []).map((sn) => ["BOX", sn]),
-        formulario.snFONO ? ["FONO", formulario.snFONO] : [],
-      ].filter((row) => row.length > 0),
-    });
-
-    // Materiales simplificados
-    const materiales = [
-      ["Plan Gamer", formulario.planGamer || "No"],
-      ["KIT WIFI PRO", formulario.kitWifiPro || "No"],
-      ["Servicio Cableado MESH", formulario.servicioCableadoMesh || "No"],
-      ["Cat 5E", formulario.cat5e],
-      ["Cat 6", formulario.cat6],
-      ["Puntos UTP", formulario.puntosUTP],
-    ];
-    autoTable(docPDF, {
-      startY: docPDF.lastAutoTable.finalY + 10,
-      head: [["Material", "Cantidad / Detalle"]],
-      body: materiales,
-    });
-
-    docPDF.text(
-      `Observaciones: ${formulario.observacion || "Ninguna"}`,
-      20,
-      docPDF.lastAutoTable.finalY + 10
-    );
-
-    const blob = docPDF.output("blob");
-    const pdfRef = ref(storage, `comprobantes_liquidacion/${instalacion.codigoCliente}.pdf`);
-    await uploadBytes(pdfRef, blob);
-    return await getDownloadURL(pdfRef);
-  };
+  
 
   /* -------------------------------- confirmar -------------------------------- */
   const handleConfirmar = async () => {
@@ -458,9 +361,7 @@ export default function FormularioLiquidacion({ instalacion, onFinalizar, onCanc
         await actualizarEquipo(sn);
       }
 
-      // 3) PDF + notificación (REEMPLAZA SOLO ESTE BLOQUE)
-const pdfUrl = await generarComprobantePDF();
-
+      // 3) Notificación (SIN PDF y SIN Storage)
 const payload = {
   tipo: "Liquidación",
   codigoCliente: instalacion.codigoCliente,
@@ -469,7 +370,6 @@ const payload = {
   cuadrilla: instalacion.cuadrillaNombre || "Sin cuadrilla",
   usuario: `${userData?.nombres} ${userData?.apellidos}`,
   fecha: serverTimestamp(),
-  link: pdfUrl,
   equipos: {
     snONT: formulario.snONT,
     proidONT: formulario.proidONT,
@@ -478,13 +378,14 @@ const payload = {
     snFONO: formulario.snFONO || "",
   },
   servicios: {
-    planGamer: !!formulario.planGamer,           // INTERNETGAMER
+    planGamer: !!formulario.planGamer,
     kitWifiPro: !!formulario.kitWifiPro,
     servicioCableadoMesh: !!formulario.servicioCableadoMesh,
     cat5e: Number(formulario.cat5e || 0),
     cat6: Number(formulario.cat6 || 0),
     puntosUTP: Number(formulario.puntosUTP || 0),
   },
+  // Puedes dejar un mensaje estandarizado sin link
   mensaje: `✅ Cliente: ${instalacion.cliente} • Pedido: ${instalacion.codigoCliente} • Cuadrilla: ${instalacion.cuadrillaNombre} • Liquidado por: ${userData?.nombres} ${userData?.apellidos}`,
 };
 
@@ -492,8 +393,7 @@ await addDoc(collection(db, "notificaciones"), payload);
 
 toast.dismiss(loadingToast);
 
-// Toast flotante elegante (consistente con otras páginas)
-// Toast flotante elegante (REEMPLAZA SOLO ESTE BLOQUE)
+// Toast flotante elegante (SIN link al comprobante)
 toast.custom(
   (t) => {
     const mesh = payload.equipos?.snMESH || [];
@@ -518,15 +418,6 @@ toast.custom(
           📦 KIT WIFI PRO: {payload.servicios.kitWifiPro ? "Sí" : "No"}<br />
           🟣 Cableado MESH: {payload.servicios.servicioCableadoMesh ? "Sí" : "No"}<br />
           UTP: {payload.servicios.puntosUTP} (Cat5e {payload.servicios.cat5e} / Cat6 {payload.servicios.cat6})<br />
-          📄{" "}
-          <a
-            href={payload.link}
-            target="_blank"
-            rel="noreferrer"
-            className="text-blue-700 underline hover:no-underline"
-          >
-            Abrir comprobante
-          </a><br />
           👤 Liquidado por: <b>{payload.usuario}</b>
         </div>
       </div>
@@ -535,9 +426,9 @@ toast.custom(
   { duration: 7000, position: "top-right" }
 );
 
-
-// Mensaje breve adicional (opcional, se mantiene el estilo previo)
+// Mensaje breve adicional (opcional)
 toast.success("✅ Liquidación completada con éxito.");
+
 
 
       // 🔒 bloquear UI y avisar al padre
