@@ -69,6 +69,39 @@ function useDebouncedValue(value, delay = 300) {
   return deb;
 }
 
+/* ====== Duración HH:mm entre horaInicio y horaFin ====== */
+function parseHM(s) {
+  if (!s || typeof s !== "string") return null;
+  const m = /^(\d{1,2}):(\d{2})$/.exec(s.trim());
+  if (!m) return null;
+  const hh = Number(m[1]);
+  const mm = Number(m[2]);
+  if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
+  return hh * 60 + mm;
+}
+function fmtHM(mins) {
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+function diffDurationMinutes(hInicio, hFin) {
+  const a = parseHM(hInicio);
+  const b = parseHM(hFin);
+  if (a == null || b == null) return null; // falta alguno → sin duración
+  let diff = b - a;
+  if (diff < 0) diff += 24 * 60;           // cruce de medianoche
+  return diff;                              // en minutos
+}
+
+function humanizeMinutes(mins) {
+  if (mins == null) return "-";
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  if (h > 0 && m > 0) return `${h} h ${m} min`;
+  if (h > 0) return `${h} h`;
+  return `${m} min`;
+}
+
 /* =========================
    Listas de selects
 ========================= */
@@ -220,7 +253,7 @@ export default function PaginaGarantias() {
      Caché de F. Instalación (global, fuera del filtro de mes)
      Guardamos { ymd, iso } para escribir en Firestore al guardar
   ========================= */
-  const [cacheInstalFinal, setCacheInstalFinal] = useState({}); // key -> {ymd, iso} | "-" 
+  const [cacheInstalFinal, setCacheInstalFinal] = useState({}); // key -> {ymd, iso} | "-"
   const [loadingKey, setLoadingKey] = useState({}); // key -> boolean
 
   // Usa el índice compuesto (cliente + codigoCliente + estado + fechaInstalacion DESC)
@@ -275,7 +308,9 @@ export default function PaginaGarantias() {
       const esGarantiaFlag = Boolean(i.esGarantia);
       return esGarantiaFlag || ts.includes("garant");
     });
-    return filtraBase(soloGarantias).filter((i) => filtros.estado === "" || i.estado === filtros.estado);
+    return filtraBase(soloGarantias).filter(
+      (i) => filtros.estado === "" || i.estado === filtros.estado
+    );
   }, [instalaciones, filtros, clienteDeb, cuadrillaDeb]);
 
   // Denominador: FINALIZADAS sin garantía (mismos filtros base)
@@ -339,7 +374,10 @@ export default function PaginaGarantias() {
       const na = typeof va === "number";
       const nb = typeof vb === "number";
       if (na && nb) return va - vb;
-      return String(va).localeCompare(String(vb), undefined, { numeric: true, sensitivity: "base" });
+      return String(va).localeCompare(String(vb), undefined, {
+        numeric: true,
+        sensitivity: "base",
+      });
     });
     if (sort.dir === "desc") arr.reverse();
     return arr;
@@ -393,7 +431,6 @@ export default function PaginaGarantias() {
     const key = `${codigo}||${(cliente || "").toLowerCase()}`;
     let base = cacheInstalFinal[key];
     if (!base || base === "-") {
-      // intenta obtenerla al vuelo
       await ensureRelatedInstallDate(codigo, cliente);
       base = cacheInstalFinal[key];
     }
@@ -417,16 +454,14 @@ export default function PaginaGarantias() {
       casoGarantia: form.casoGarantia ?? "",
       imputadoGarantia: form.imputadoGarantia ?? "",
       // Nuevos campos para dashboard:
-      fechaInstalacionBase: fechaInstalacionBase || "", // ISO ("" si no se encontró)
-      diasDesdeInstalacion: diasDesdeInstalacion ?? null, // number | null
+      fechaInstalacionBase: fechaInstalacionBase || "",
+      diasDesdeInstalacion: diasDesdeInstalacion ?? null,
       modificadoPor: userData?.nombres || userData?.email || userData?.uid || "sistema",
       ultimaModificacion: new Date(),
     };
 
     // Optimista
-    setInstalaciones((prev) =>
-      prev.map((i) => (i.id === id ? { ...i, ...payload } : i))
-    );
+    setInstalaciones((prev) => prev.map((i) => (i.id === id ? { ...i, ...payload } : i)));
 
     try {
       await updateDoc(doc(db, "instalaciones", id), payload);
@@ -457,7 +492,10 @@ export default function PaginaGarantias() {
       <button
         type="button"
         onClick={() => toggleSort(field)}
-        className={classNames("flex items-center gap-1 select-none", "transition-colors hover:text-yellow-200")}
+        className={classNames(
+          "flex items-center gap-1 select-none",
+          "transition-colors hover:text-yellow-200"
+        )}
         title="Ordenar"
       >
         <span>{label}</span>
@@ -487,8 +525,7 @@ export default function PaginaGarantias() {
             <div className="text-sm rounded-lg px-3 py-2 border bg-white/70 dark:bg-gray-800/60 border-gray-200 dark:border-gray-700">
               % Garantías (sobre finalizadas sin garantía):{" "}
               <b>
-                {porcentajeGarantias.toLocaleString(undefined, { maximumFractionDigits: 1 })}
-                %
+                {porcentajeGarantias.toLocaleString(undefined, { maximumFractionDigits: 1 })}%
               </b>{" "}
               <span className="text-xs text-gray-500 ml-2">
                 ({garantiasFiltradas.length} / {totalFinalizadasSinGarantia || 0})
@@ -590,7 +627,7 @@ export default function PaginaGarantias() {
             Cargando garantías…
           </div>
         ) : (
-          <div className="min-w-[1500px]">
+          <div className="min-w-[1600px]">
             <table className="w-full text-xs md:text-sm border-collapse">
               <thead className="bg-[#30518c] dark:bg-blue-900 text-white text-sm font-semibold sticky top-0 z-[1]">
                 <tr>
@@ -601,6 +638,8 @@ export default function PaginaGarantias() {
                   <th className="p-2 whitespace-nowrap"><Header label="Dirección" field="direccion" /></th>
                   <th className="p-2 whitespace-nowrap"><Header label="Cuadrilla" field="cuadrilla" /></th>
                   <th className="p-2 whitespace-nowrap"><Header label="Tipo/Servicio" field="tipoServicio" /></th>
+                  {/* NUEVA COLUMNA: TIEMPO */}
+                  <th className="p-2 whitespace-nowrap">Tiempo</th>
                   <th className="p-2 whitespace-nowrap"><Header label="Motivo Cancelación" field="motivoCancelacion" /></th>
                   <th className="p-2 whitespace-nowrap"><Header label="Estado" field="estado" /></th>
                   <th className="p-2 whitespace-nowrap"><Header label="Motivo" field="motivo" /></th>
@@ -621,12 +660,15 @@ export default function PaginaGarantias() {
                   const base = cacheInstalFinal[key];
                   const fInstal = base && base !== "-" ? base.ymd : (loadingKey[key] ? "…" : "-");
 
-                  // DÍAS transcurridos = F. Garantía - F. Instalación (clamp >= 0)
+                  // DÍAS transcurridos
                   let dias = loadingKey[key] ? "…" : "-";
                   if (fGarantia !== "-" && base && base !== "-" && base.iso) {
                     const diff = dayjs(toISO(inst.fechaInstalacion)).diff(dayjs(base.iso), "day");
                     dias = Math.max(0, diff);
                   }
+
+                  // Duración HH:mm
+                  const dur = diffDurationMinutes(inst.horaInicio, inst.horaFin);
 
                   return (
                     <tr key={inst.id} className="border-b hover:bg-gray-50 dark:hover:bg-gray-800/60">
@@ -645,6 +687,23 @@ export default function PaginaGarantias() {
                         {inst.cuadrillaNombre || inst.cuadrilla || "-"}
                       </td>
                       <td className="p-2">{inst.tipoServicio || "-"}</td>
+
+                      {/* Tiempo */}
+                      <td className="p-2 max-w-[260px]">
+  {(() => {
+    const durMin = diffDurationMinutes(inst.horaInicio, inst.horaFin);
+    const durText = humanizeMinutes(durMin);
+    return (
+      <div className="grid grid-cols-[auto,1fr] gap-x-2 gap-y-1 whitespace-nowrap">
+        <div><b>Tramo:</b> {inst.tramo}</div>
+        <div><b>H. Inicio:</b> {inst.horaInicio}</div>
+        <div><b>H. Fin:</b> {inst.horaFin}</div>
+        <div><b>Duración:</b> {durText}</div>
+      </div>
+    );
+  })()}
+</td>
+
                       <td className="p-2 whitespace-normal max-w-[220px]">{inst.motivoCancelacion || "-"}</td>
 
                       <td className="p-2">
@@ -705,7 +764,7 @@ export default function PaginaGarantias() {
                         )}
                       </td>
 
-                      {/* Responsable (select) */}
+                      {/* Responsable */}
                       <td className="p-2">
                         {isEditing ? (
                           <select
@@ -725,7 +784,7 @@ export default function PaginaGarantias() {
                         )}
                       </td>
 
-                      {/* Caso (select) */}
+                      {/* Caso */}
                       <td className="p-2">
                         {isEditing ? (
                           <select
@@ -745,7 +804,7 @@ export default function PaginaGarantias() {
                         )}
                       </td>
 
-                      {/* Imputado (select) */}
+                      {/* Imputado */}
                       <td className="p-2">
                         {isEditing ? (
                           <select
@@ -807,7 +866,7 @@ export default function PaginaGarantias() {
 
                 {pageData.length === 0 && (
                   <tr>
-                    <td colSpan={14} className="text-center py-6 text-gray-600 dark:text-gray-400">
+                    <td colSpan={15} className="text-center py-6 text-gray-600 dark:text-gray-400">
                       No hay garantías para los filtros seleccionados
                     </td>
                   </tr>
