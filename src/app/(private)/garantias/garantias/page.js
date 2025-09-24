@@ -107,7 +107,10 @@ function humanizeMinutes(mins) {
 ========================= */
 const OPC_RESPONSABLE = ["Cuadrilla", "Cliente", "Externo"];
 const OPC_CASO = [
-  "Cambio de Equipo",
+  "Cambio de ONT",
+  "Cambio de MESH",
+  "Cambio de FONO",
+  "Cambio de BOX",
   "Cambio de Conector",
   "Cambio de Roseta",
   "Recableado",
