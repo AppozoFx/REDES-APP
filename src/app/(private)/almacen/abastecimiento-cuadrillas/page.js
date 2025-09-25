@@ -449,18 +449,21 @@ export default function AbastecimientoPage() {
 
   /* ==== Exportar ==== */
   function buildExportRows() {
-    const activas = cuadrillas.filter(cu => !omitidas[cu.id]);
-    return activas.map(cu => ({
-      Coordinador: prettyCoordName(cu),
-      Cuadrilla: cu.nombre || cu.id,
-      "Sug ONT":  valorFinal(cu.id, "ONT"),
-      "Sug MESH": valorFinal(cu.id, "MESH"),
-      "Sug FONO": valorFinal(cu.id, "FONO"),
-      "Sug BOX":  valorFinal(cu.id, "BOX"),
-      "Bobinas (Resi)": bobinaCant[cu.id] || 0,
-      "Condo (rollo)": rollo[cu.id] ? "Sí" : "No",
-    }));
-  }
+  // Respeta el orden y filtro de la UI
+  const filas = uiCuadrillasEnOrden;
+
+  return filas.map(cu => ({
+    Coordinador: prettyCoordName(cu),
+    Cuadrilla: cu.nombre || cu.id,
+    "Sug ONT":  valorFinal(cu.id, "ONT"),
+    "Sug MESH": valorFinal(cu.id, "MESH"),
+    "Sug FONO": valorFinal(cu.id, "FONO"),
+    "Sug BOX":  valorFinal(cu.id, "BOX"),
+    "Bobinas (Resi)": bobinaCant[cu.id] || 0,
+    "Condo (rollo)": rollo[cu.id] ? "Sí" : "No",
+  }));
+}
+
 
   /* --- Orden solo por Coordinador --- */
 const [sortDirection, setSortDirection] = useState("asc"); // "asc" | "desc"
@@ -470,20 +473,33 @@ function handleSortByCoordinador() {
 }
 
 /* Lista de cuadrillas ordenada por Coordinador */
-const sortedCuadrillas = useMemo(() => {
+  const sortedCuadrillas = useMemo(() => {
   // si no hay cuadrillas, retorna tal cual
   if (!cuadrillas?.length) return cuadrillas;
 
   const arr = [...cuadrillas];
-  arr.sort((a, b) => {
+    arr.sort((a, b) => {
     const aVal = (prettyCoordName(a) || "").toUpperCase();
     const bVal = (prettyCoordName(b) || "").toUpperCase();
     if (aVal < bVal) return sortDirection === "asc" ? -1 : 1;
     if (aVal > bVal) return sortDirection === "asc" ? 1 : -1;
     return 0;
-  });
-  return arr;
-}, [cuadrillas, sortDirection, coorMap]);
+    });
+    return arr;
+  }, [cuadrillas, sortDirection, coorMap]);
+
+
+  /* --- Lista que respeta exactamente lo que ve el usuario en la tabla --- */ 
+const uiCuadrillasEnOrden = useMemo(() => {
+  // Parte del orden actual (por Coordinador)
+  const base = sortedCuadrillas || [];
+
+  // Mismo filtro que la UI de la tabla:
+  // - Si verOmitidas = false -> excluye omitidas
+  // - Si verOmitidas = true  -> incluye todas (como en la tabla)
+  return base.filter(cu => verOmitidas ? true : !omitidas[cu.id]);
+}, [sortedCuadrillas, verOmitidas, omitidas]);
+
 
 
   

@@ -137,20 +137,25 @@ const generarPDFDevolucion = async (guiaId, datos) => {
       docpdf.text(`${eq.SN} - ${eq.equipo}`, 40, y, C); y += 5;
     });
 
-    if (datos.drump) {
-      y += 4;
-      docpdf.text(`DRUMP: ${datos.drump}`, 40, y, C); y += 5;
-    }
-    if (datos.metraje > 0) {
-      docpdf.text(`Metros devueltos: ${datos.metraje} m`, 40, y, C); y += 5;
-    }
-    if (datos.bobinaCompletaDevuelta) {
-      y += 2;
-      docpdf.setFont("helvetica", "bold");
-      docpdf.text("Bobina completa devuelta", 40, y, C);
-      docpdf.setFont("helvetica", "normal");
-      y += 5;
-    }
+    // ... tras equipos ...
+const listaBobinas = Array.isArray(datos.bobinas) ? datos.bobinas : [];
+if (listaBobinas.length > 0) {
+  y += 4;
+  docpdf.setFont("helvetica", "bold");
+  docpdf.text("BOBINAS (DRUMP) DEVUELTAS", 40, y, C); y += 6;
+  docpdf.setFont("helvetica", "normal");
+  listaBobinas.forEach((b) => {
+    const linea = b.forceCierre
+      ? `${b.codigo} — bobina completa`
+      : `${b.codigo} — ${Number(b.metraje || 0)} m`;
+    docpdf.text(linea, 40, y, C); y += 5;
+  });
+  if (Number(datos.totalMetrosBobinas || 0) > 0) {
+    y += 1;
+    docpdf.text(`Total metros devueltos: ${datos.totalMetrosBobinas} m`, 40, y, C); y += 5;
+  }
+}
+
 
     const mats = Object.entries(datos.materiales || {});
     if (mats.length > 0) {
@@ -197,9 +202,11 @@ const generarPDFDevolucion = async (guiaId, datos) => {
       tecnicos: datos.tecnicos,
       usuario: datos.usuario,
       urlComprobante,
-      extraInfo: `🛠️ *Equipos:* ${datos.equipos.length}\n📦 *Materiales:* ${
-        Object.values(datos.materiales || {}).reduce((a, b) => a + (Number(b) || 0), 0)
-      }\n🌀 *Metros devueltos:* ${datos.metraje || 0}`,
+      extraInfo: `🛠️ *Equipos:* ${datos.equipos.length}
+📦 *Materiales:* ${Object.values(datos.materiales || {}).reduce((a, b) => a + (Number(b) || 0), 0)}
+🧵 *DRUMPs:* ${datos.bobinas?.length || 0}
+📏 *Metros devueltos:* ${datos.totalMetrosBobinas || 0}`
+,
     })
   );
 
@@ -276,6 +283,20 @@ export default function Devolucion() {
   const [stockEquiposCuadrilla, setStockEquiposCuadrilla] = useState([]);
   const [bobinasActivas, setBobinasActivas] = useState([]);
 
+  // ⭐ NUEVO: selección múltiple de DRUMPs para devolución
+const [bobinasSeleccionadas, setBobinasSeleccionadas] = useState([]);
+// Estructura: [{ codigo, metraje: number, forceCierre: boolean }]
+
+// Utilidad para formatear fecha (ms/timestamp/string -> dd/mm/yyyy)
+const fmtFecha = (v) => {
+  try {
+    const d = v?.toDate ? v.toDate() : new Date(v);
+    if (Number.isNaN(d.getTime())) return "—";
+    return d.toLocaleDateString("es-PE");
+  } catch { return "—"; }
+};
+
+
   const [procesando, setProcesando] = useState(false);
 
   const [showPreview, setShowPreview] = useState(false);
@@ -319,13 +340,23 @@ export default function Devolucion() {
     const eqs = await getDocs(collection(db, `cuadrillas/${cuadrillaId}/stock_equipos`));
     setStockEquiposCuadrilla(eqs.docs.map((d) => ({ id: d.id, ...d.data() })));
 
-    if (tipo === "Residencial") {
-      const snap = await getDocs(collection(db, `cuadrillas/${cuadrillaId}/stock_bobinas`));
-      const activas = snap.docs.map((d) => d.data()).filter((b) => b.estado !== "devuelto");
-      setBobinasActivas(activas);
-    } else {
-      setBobinasActivas([]);
-    }
+    // Dentro de obtenerStockCuadrilla(...)
+if (tipo === "Residencial") {
+  const snap = await getDocs(collection(db, `cuadrillas/${cuadrillaId}/stock_bobinas`));
+  const activas = snap.docs
+    .map((d) => ({ id: d.id, ...d.data() }))
+    .filter((b) => b.estado !== "devuelto")
+    .map((b) => ({
+      codigo: (b.codigo ?? b.id ?? "").toUpperCase(),
+      metros: Number(b.metros || 0),
+      f_ingreso: b.f_ingreso ?? b.f_despacho ?? b.fecha ?? null,
+      guia_despacho: b.guia_despacho ?? b.guia ?? "",
+    }));
+  setBobinasActivas(activas);
+} else {
+  setBobinasActivas([]);
+}
+
   };
 
   /* ======= Selección de cuadrilla ======= */
@@ -346,13 +377,22 @@ export default function Devolucion() {
 
   /* ======= DRUMPs activos ======= */
   useEffect(() => {
-    (async () => {
-      if (!datosDevolucion.cuadrillaId || datosDevolucion.tipo !== "Residencial") return;
-      const snap = await getDocs(collection(db, `cuadrillas/${datosDevolucion.cuadrillaId}/stock_bobinas`));
-      const activas = snap.docs.map((d) => d.data()).filter((b) => b.estado !== "devuelto");
-      setBobinasActivas(activas);
-    })();
-  }, [datosDevolucion.cuadrillaId, datosDevolucion.tipo]);
+  (async () => {
+    if (!datosDevolucion.cuadrillaId || datosDevolucion.tipo !== "Residencial") return;
+    const snap = await getDocs(collection(db, `cuadrillas/${datosDevolucion.cuadrillaId}/stock_bobinas`));
+    const activas = snap.docs
+      .map((d) => ({ id: d.id, ...d.data() }))
+      .filter((b) => b.estado !== "devuelto")
+      .map((b) => ({
+        codigo: (b.codigo ?? b.id ?? "").toUpperCase(),
+        metros: Number(b.metros || 0),
+        f_ingreso: b.f_ingreso ?? b.f_despacho ?? b.fecha ?? null,
+        guia_despacho: b.guia_despacho ?? b.guia ?? "",
+      }));
+    setBobinasActivas(activas);
+  })();
+}, [datosDevolucion.cuadrillaId, datosDevolucion.tipo]);
+
 
   /* ======= Generar guía ======= */
   const generarNumeroGuia = async () => {
@@ -490,22 +530,25 @@ export default function Devolucion() {
       }
     }
 
-    // bobina residencial
-    if (datosDevolucion.tipo === "Residencial" && datosDevolucion.drump) {
-      const bob = bobinasActivas.find(
-        (b) => (b.codigo || "").toUpperCase() === (datosDevolucion.drump || "").toUpperCase()
-      );
-      if (!bob) {
-        errores.push(`• DRUMP ${datosDevolucion.drump} no está en stock de la cuadrilla.`);
-      } else {
-        const m = Number(datosDevolucion.metraje) || 0;
-        if (m > 0 && m > Number(bob.metros || 0)) {
-          errores.push(
-            `• DRUMP ${datosDevolucion.drump}: devuelves ${m} m y solo tiene ${bob.metros} m`
-          );
-        }
+    // ✅ Validación DRUMPs residenciales (multi)
+if (datosDevolucion.tipo === "Residencial" && bobinasSeleccionadas.length > 0) {
+  for (const sel of bobinasSeleccionadas) {
+    const b = bobinasActivas.find(x => x.codigo === sel.codigo);
+    if (!b) {
+      errores.push(`• DRUMP ${sel.codigo} no está en stock de la cuadrilla.`);
+      continue;
+    }
+    if (!sel.forceCierre) {
+      const m = Number(sel.metraje || 0);
+      if (m <= 0) {
+        errores.push(`• DRUMP ${sel.codigo}: ingresa metros > 0 o marca "bobina completa".`);
+      } else if (m > Number(b.metros || 0)) {
+        errores.push(`• DRUMP ${sel.codigo}: devuelves ${m} m y solo tiene ${b.metros} m`);
       }
     }
+  }
+}
+
 
     if (errores.length > 0) {
       toast.error("Revisa los montos devueltos:\n" + errores.join("\n"));
@@ -515,18 +558,21 @@ export default function Devolucion() {
   };
 
   /* ======= DRUMP residencial ======= */
-  const procesarDevolucionBobinaResidencial = async (batch, guiaId, { forceCierre = false } = {}) => {
-    const drRef = doc(db, `cuadrillas/${datosDevolucion.cuadrillaId}/stock_bobinas`, datosDevolucion.drump);
+  // ⭐ NUEVO: procesa varias bobinas residenciales
+const procesarDevolucionBobinasResidencial = async (batch, guiaId) => {
+  for (const sel of bobinasSeleccionadas) {
+    const drRef = doc(db, `cuadrillas/${datosDevolucion.cuadrillaId}/stock_bobinas`, sel.codigo);
     const drSnap = await getDoc(drRef);
     if (!drSnap.exists()) {
-      toast.error(`❌ El DRUMP ${datosDevolucion.drump} no existe en la cuadrilla.`);
+      toast.error(`❌ El DRUMP ${sel.codigo} no existe en la cuadrilla.`);
       throw new Error("DRUMP no encontrado");
     }
-
     const datosBobina = drSnap.data();
+    const mDev = Number(sel.metraje || 0);
+    const stock = Number(datosBobina.metros || 0);
 
-    if (forceCierre) {
-      // Devolución de bobina completa: estado devuelto y metros 0
+    if (sel.forceCierre || mDev >= stock) {
+      // devolver COMPLETA
       batch.set(
         drRef,
         {
@@ -538,48 +584,46 @@ export default function Devolucion() {
         },
         { merge: true }
       );
-      toast.success(`♻️ Bobina ${datosDevolucion.drump} marcada como *devuelto* (0 m).`);
-      // Importante: no sumamos metros al almacén en este modo.
-      return;
+      toast.success(`♻️ Bobina ${sel.codigo} marcada como devuelta (0 m).`);
+      // Nota: si forceCierre, NO sumamos metros al almacén.
+      if (!sel.forceCierre && mDev > 0) {
+        const bobinaAlmacenRef = doc(db, "materiales_stock", "bobina");
+        const snapAlm = await getDoc(bobinaAlmacenRef);
+        const actual = snapAlm.exists() ? Number(snapAlm.data().cantidad || 0) : 0;
+        batch.set(
+          bobinaAlmacenRef,
+          {
+            nombre: "bobina",
+            cantidad: actual + mDev,
+            actualizadoPor: datosDevolucion.usuario,
+            actualizadoEn: serverTimestamp(),
+          },
+          { merge: true }
+        );
+      }
+      continue;
     }
 
-    // Modo “por metros”
-    const mDev = Number(datosDevolucion.metraje) || 0;
-    if (mDev > Number(datosBobina.metros || 0)) {
-      toast.error(`❌ No puedes devolver más de ${datosBobina.metros} metros.`);
+    // devolver por METROS
+    if (mDev > stock) {
+      toast.error(`❌ DRUMP ${sel.codigo}: no puedes devolver más de ${stock} m.`);
       throw new Error("Metros inválidos");
     }
+    const metrosRestantes = stock - mDev;
 
-    const metrosRestantes = Number(datosBobina.metros || 0) - mDev;
+    batch.set(
+      drRef,
+      {
+        metros: metrosRestantes,
+        actualizadoPor: datosDevolucion.usuario,
+        actualizadoEn: serverTimestamp(),
+        guia_devolucion: guiaId,
+      },
+      { merge: true }
+    );
+    toast.success(`✅ ${sel.codigo}: ${metrosRestantes} m restantes.`);
 
-    if (metrosRestantes <= 0) {
-      batch.set(
-        drRef,
-        {
-          metros: 0,
-          estado: "devuelto",
-          f_devolucion: serverTimestamp(),
-          guia_devolucion: guiaId,
-          usuario: datosDevolucion.usuario,
-        },
-        { merge: true }
-      );
-      toast.success(`♻️ Bobina ${datosDevolucion.drump} marcada como *devuelto* (0 m).`);
-    } else {
-      batch.set(
-        drRef,
-        {
-          metros: metrosRestantes,
-          actualizadoPor: datosDevolucion.usuario,
-          actualizadoEn: serverTimestamp(),
-          guia_devolucion: guiaId,
-        },
-        { merge: true }
-      );
-      toast.success(`✅ Bobina actualizada: ${metrosRestantes} m restantes.`);
-    }
-
-    // Sumar metros devueltos al almacén (solo en modo “por metros”)
+    // sumar a almacén
     if (mDev > 0) {
       const bobinaAlmacenRef = doc(db, "materiales_stock", "bobina");
       const snapAlm = await getDoc(bobinaAlmacenRef);
@@ -595,7 +639,9 @@ export default function Devolucion() {
         { merge: true }
       );
     }
-  };
+  }
+};
+
 
   /* ======= Registrar Devolución ======= */
   const handleRegistrarDevolucion = async () => {
@@ -618,21 +664,26 @@ export default function Devolucion() {
       setUltimaGuia(guiaId);
 
       // Devolución completa de bobina residencial sin metros
-      const forceCierreBobina =
-        datosDevolucion.tipo === "Residencial" &&
-        !!datosDevolucion.drump?.trim() &&
-        (Number(datosDevolucion.metraje) || 0) === 0;
+      // Totales bobinas residenciales
+const totalMetrosBobinas = bobinasSeleccionadas
+  .filter(x => !x.forceCierre)
+  .reduce((t, x) => t + (Number(x.metraje || 0)), 0);
 
-      const hayEquipos = datosDevolucion.equipos.length > 0;
-      const hayMats = Object.values(materialesDevueltos).some((v) => Number(v) > 0);
-      const hayMetros = Number(datosDevolucion.metraje) > 0;
+const hayBobinaCompleta = bobinasSeleccionadas.some(x => x.forceCierre);
+const hayBobinas = bobinasSeleccionadas.length > 0;
+const hayMetrosCondominio = (datosDevolucion.tipo === "Condominio") && Number(datosDevolucion.metraje) > 0;
 
-      if (!hayEquipos && !hayMats && !hayMetros && !forceCierreBobina) {
-        toast.error("⚠️ Debes devolver al menos un equipo, material, metros de bobina o una bobina completa (DRUMP).");
-        setProcesando(false);
-        toast.dismiss(toastId);
-        return;
-      }
+const hayEquipos = datosDevolucion.equipos.length > 0;
+const hayMats = Object.values(materialesDevueltos).some((v) => Number(v) > 0);
+
+// Antes exigías uno de los casos; ahora incluye los nuevos
+if (!hayEquipos && !hayMats && !hayMetrosCondominio && !hayBobinas && !hayBobinaCompleta && totalMetrosBobinas === 0) {
+  toast.error("⚠️ Debes devolver al menos un equipo, material, bobina completa o metros de bobina.");
+  setProcesando(false);
+  toast.dismiss(toastId);
+  return;
+}
+
 
       // 1) Equipos -> a almacén + guia_devolucion (optimizado)
       if (datosDevolucion.equipos.length > 0) {
@@ -694,10 +745,10 @@ export default function Devolucion() {
         );
       }
 
-      // 3) DRUMP / Metros
-      if (datosDevolucion.tipo === "Residencial" && datosDevolucion.drump && (hayMetros || forceCierreBobina)) {
-        await procesarDevolucionBobinaResidencial(batch, guiaId, { forceCierre: forceCierreBobina });
-      }
+      // 3) DRUMPs / Metros
+if (datosDevolucion.tipo === "Residencial" && bobinasSeleccionadas.length > 0) {
+  await procesarDevolucionBobinasResidencial(batch, guiaId);
+}
 
       if (datosDevolucion.tipo === "Condominio" && Number(datosDevolucion.metraje) > 0) {
         const metros = Number(datosDevolucion.metraje) || 0;
@@ -742,8 +793,15 @@ export default function Devolucion() {
         materiales: materialesDevueltos,
         tecnicosUID: tecnicos,
         f_registro: serverTimestamp(),
-        bobinaCompletaDevuelta: forceCierreBobina || false,
-      };
+         // NUEVO
+  bobinas: bobinasSeleccionadas.map(x => ({
+    codigo: x.codigo,
+    metraje: Number(x.metraje || 0),
+    forceCierre: !!x.forceCierre,
+  })),
+  totalMetrosBobinas: totalMetrosBobinas,
+  bobinaCompletaDevuelta: hayBobinaCompleta || false,
+};
       await addDoc(collection(db, "guias_devolucion"), datosFinal);
 
       // 5) PDF + Notificación
@@ -753,25 +811,23 @@ export default function Devolucion() {
         tipo: "Devolución",
         mensaje: `🔄 ${datosFinal.usuario} registró devolución de "${datosFinal.cuadrillaNombre}". Equipos: ${
           datosFinal.equipos.length
-        }, Materiales: ${Object.values(datosFinal.materiales || {}).reduce((a, b) => a + (Number(b) || 0), 0)}, Metros: ${
-          datosFinal.metraje || 0
-        }`,
+        }, Materiales: ${Object.values(datosFinal.materiales || {}).reduce((a, b) => a + (Number(b) || 0), 0)}, Metros: ${datosFinal.totalMetrosBobinas || 0}`,
         usuario: datosFinal.usuario,
         fecha: serverTimestamp(),
         guiaId: datosFinal.guiaId,
         link: urlComprobante,
         detalles: {
-          cuadrilla: datosFinal.cuadrillaNombre,
-          tipo: datosFinal.tipo,
-          equipos: datosFinal.equipos,
-          materiales: datosFinal.materiales,
-          drump: datosFinal.drump || "",
-          metraje: datosFinal.metraje || 0,
-        },
+  cuadrilla: datosFinal.cuadrillaNombre,
+  tipo: datosFinal.tipo,
+  equipos: datosFinal.equipos,
+  materiales: datosFinal.materiales,
+  bobinas: datosFinal.bobinas || [],
+  metraje_total: datosFinal.totalMetrosBobinas || 0,
+},
         visto: false,
       });
 
-      toast.success("✅ Devolución registrada correctamente.");
+      toast.success("✅ Devolución registrada correctamente.", { id: toastId });
 
       // Reset UI
       setShowPreview(false);
@@ -798,9 +854,10 @@ export default function Devolucion() {
       setTecnicos([]);
       setBobinasActivas([]);
       inputRef.current?.focus();
+      setBobinasSeleccionadas([]);
     } catch (err) {
       console.error(err);
-      toast.error("❌ Error al registrar la devolución.");
+      toast.error("❌ Error al registrar la devolución.", { id: toastId });
     } finally {
       setProcesando(false);
     }
@@ -812,19 +869,29 @@ export default function Devolucion() {
     (a, b) => a + (Number(b) || 0), 0
   );
 
+  // ✅ NUEVO: totales/flags para bobinas residenciales
+const totalMetrosBobinas = bobinasSeleccionadas
+  .filter(x => !x.forceCierre)
+  .reduce((t, x) => t + (Number(x.metraje || 0)), 0);
+const hayBobinaCompleta = bobinasSeleccionadas.some(x => x.forceCierre);
+const hayBobinas = bobinasSeleccionadas.length > 0;
+
   // Permite previsualizar si:
   // - hay equipos, o
   // - hay materiales, o
   // - hay metraje > 0, o
   // - hay DRUMP residencial (aunque metraje sea 0)
-  const puedePrevisualizar =
-    !!datosDevolucion.cuadrillaId &&
-    (
-      listaEquipos.length > 0 ||
-      totalMateriales > 0 ||
-      Number(datosDevolucion.metraje) > 0 ||
-      (datosDevolucion.tipo === "Residencial" && !!datosDevolucion.drump?.trim())
-    );
+  // ✅ NUEVO: condición para mostrar el botón
+const puedePrevisualizar =
+  !!datosDevolucion.cuadrillaId &&
+  (
+    listaEquipos.length > 0 ||
+    totalMateriales > 0 ||
+    // Condominio por metros
+    (datosDevolucion.tipo === "Condominio" && Number(datosDevolucion.metraje) > 0) ||
+    // Residencial: una o varias bobinas (completa o por metros)
+    (datosDevolucion.tipo === "Residencial" && (hayBobinas || totalMetrosBobinas > 0 || hayBobinaCompleta))
+  );
 
   /* =======================
      UI
@@ -943,60 +1010,183 @@ export default function Devolucion() {
         )}
 
         {/* DRUMP / Metros */}
-        {datosDevolucion.tipo === "Residencial" && (
-          <div className="mt-6 grid md:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium mb-1">Código DRUMP devuelto:</label>
-              <input
-                type="text"
-                placeholder="Ej: WIN-4242"
-                className="w-full border rounded-2xl px-3 h-11"
-                value={datosDevolucion.drump}
-                onChange={(e) => setDatosDevolucion((p) => ({ ...p, drump: e.target.value.toUpperCase() }))}
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium mb-1">Metros devueltos de esta bobina:</label>
-              <input
-                type="number"
-                min="0"
-                className="w-full border rounded-2xl px-3 h-11
-                  [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                value={datosDevolucion.metraje || ""}
-                onChange={(e) => setDatosDevolucion((p) => ({ ...p, metraje: parseInt(e.target.value) || 0 }))}
-              />
-              <p className="text-xs text-gray-500 mt-1">Registra los metros que retornan al almacén.</p>
-            </div>
-          </div>
-        )}
+        {/* ===== DRUMP Residencial (multiselección) ===== */}
+{datosDevolucion.tipo === "Residencial" && (
+  <div className="mt-6 space-y-4">
+    {/* Sugerencias (datalist) + agregar */}
+    <div className="grid md:grid-cols-[1fr_auto] gap-2">
+      <div>
+        <label className="block text-sm font-medium mb-1">Agregar DRUMP desde stock de cuadrilla</label>
+        <input
+          list="bobinas-sugeridas"
+          placeholder="Escribe o elige un DRUMP"
+          className="w-full border rounded-2xl px-3 h-11"
+          onKeyDown={(e) => {
+            if (e.key !== "Enter") return;
+            const codigo = (e.currentTarget.value || "").toUpperCase().trim();
+            if (!codigo) return;
+
+            // validar que exista en stock
+            const b = bobinasActivas.find(x => x.codigo === codigo);
+            if (!b) {
+              toast.error(`DRUMP ${codigo} no está en stock de la cuadrilla.`);
+              return;
+            }
+            // evitar duplicados
+            if (bobinasSeleccionadas.some(x => x.codigo === codigo)) {
+              toast("Ya está en la lista.", { icon: "ℹ️" });
+              return;
+            }
+            setBobinasSeleccionadas(prev => [...prev, { codigo, metraje: 0, forceCierre: false }]);
+            e.currentTarget.value = "";
+          }}
+        />
+        <datalist id="bobinas-sugeridas">
+          {bobinasActivas.map((b) => (
+            <option
+              key={b.codigo}
+              value={b.codigo}
+              label={`${b.codigo} | ${fmtFecha(b.f_ingreso)} | ${b.guia_despacho || "—"} | ${b.metros} m`}
+            />
+          ))}
+        </datalist>
+        <p className="text-xs text-gray-500 mt-1">
+          Presiona <b>Enter</b> para agregar. También puedes escribir un DRUMP manualmente, pero debe existir en stock.
+        </p>
+      </div>
+      <button
+        className="px-4 h-11 rounded-2xl bg-gradient-to-r from-indigo-600 to-blue-600 text-white"
+        onClick={() => {
+          const input = document.querySelector('input[list="bobinas-sugeridas"]');
+          const codigo = (input?.value || "").toUpperCase().trim();
+          if (!codigo) return;
+          const b = bobinasActivas.find(x => x.codigo === codigo);
+          if (!b) { toast.error(`DRUMP ${codigo} no está en stock de la cuadrilla.`); return; }
+          if (bobinasSeleccionadas.some(x => x.codigo === codigo)) { toast("Ya está en la lista.", { icon: "ℹ️" }); return; }
+          setBobinasSeleccionadas(prev => [...prev, { codigo, metraje: 0, forceCierre: false }]);
+          input.value = "";
+        }}
+      >
+        Agregar
+      </button>
+    </div>
+
+    {/* Edición de cada DRUMP seleccionado */}
+    {bobinasSeleccionadas.length > 0 && (
+      <div className="border rounded-2xl bg-white p-4 shadow-sm">
+        <h3 className="text-sm font-semibold mb-2 text-[#30518c]">🧵 DRUMPs a devolver</h3>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm border rounded-lg overflow-hidden">
+            <thead className="bg-gray-100">
+              <tr>
+                <th className="p-2 text-left">Código</th>
+                <th className="p-2 text-left">F. Despacho</th>
+                <th className="p-2 text-left">Guía</th>
+                <th className="p-2 text-right">En Stock</th>
+                <th className="p-2 text-center">Bobina completa</th>
+                <th className="p-2 text-right">Metros a devolver</th>
+                <th className="p-2 text-right">Acción</th>
+              </tr>
+            </thead>
+            <tbody>
+              {bobinasSeleccionadas.map((sel, idx) => {
+                const b = bobinasActivas.find(x => x.codigo === sel.codigo);
+                const stock = Number(b?.metros || 0);
+                return (
+                  <tr key={sel.codigo} className="border-t">
+                    <td className="p-2">{sel.codigo}</td>
+                    <td className="p-2">{fmtFecha(b?.f_ingreso)}</td>
+                    <td className="p-2">{b?.guia_despacho || "—"}</td>
+                    <td className="p-2 text-right">{stock} m</td>
+                    <td className="p-2 text-center">
+                      <input
+                        type="checkbox"
+                        checked={!!sel.forceCierre}
+                        onChange={(e) => {
+                          const forceCierre = e.target.checked;
+                          setBobinasSeleccionadas(prev => prev.map((x, i) =>
+                            i === idx ? { ...x, forceCierre, metraje: forceCierre ? 0 : x.metraje } : x
+                          ));
+                        }}
+                      />
+                    </td>
+                    <td className="p-2 text-right">
+                      <input
+                        type="number"
+                        min="0"
+                        disabled={!!sel.forceCierre}
+                        className="w-28 border rounded-xl px-2 py-1
+                          [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none text-right"
+                        value={sel.metraje}
+                        onChange={(e) => {
+                          const v = Math.max(0, parseInt(e.target.value || "0", 10));
+                          setBobinasSeleccionadas(prev => prev.map((x, i) =>
+                            i === idx ? { ...x, metraje: v } : x
+                          ));
+                        }}
+                      />
+                    </td>
+                    <td className="p-2 text-right">
+                      <button
+                        className="text-red-600 hover:underline"
+                        onClick={() => setBobinasSeleccionadas(prev => prev.filter((_, i) => i !== idx))}
+                      >
+                        Quitar
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+              <tr className="border-t font-bold bg-gray-50">
+                <td className="p-2" colSpan={5}>Total metros a devolver:</td>
+                <td className="p-2 text-right">
+                  {bobinasSeleccionadas.reduce((t, x) => t + (x.forceCierre ? 0 : Number(x.metraje || 0)), 0)} m
+                </td>
+                <td/>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    )}
+  </div>
+)}
+
 
         {datosDevolucion.tipo === "Residencial" && bobinasActivas.length > 0 && (
-          <div className="mt-4 border p-3 rounded-2xl bg-white shadow-sm">
-            <h3 className="text-sm font-semibold mb-2 text-[#30518c]">🎗️ Bobinas DRUMP en Cuadrilla</h3>
-            <table className="w-full text-sm border rounded-lg overflow-hidden">
-              <thead className="bg-gray-100">
-                <tr>
-                  <th className="p-2 text-left">Código</th>
-                  <th className="p-2 text-right">Metros</th>
-                </tr>
-              </thead>
-              <tbody>
-                {bobinasActivas.map((b, i) => (
-                  <tr key={i} className="border-t">
-                    <td className="p-2">{b.codigo}</td>
-                    <td className="p-2 text-right">{b.metros}</td>
-                  </tr>
-                ))}
-                <tr className="border-t font-bold bg-gray-50">
-                  <td className="p-2 text-right">Total:</td>
-                  <td className="p-2 text-right">
-                    {bobinasActivas.reduce((t, b) => t + (b.metros || 0), 0)} m
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        )}
+  <div className="mt-4 border p-3 rounded-2xl bg-white shadow-sm">
+    <h3 className="text-sm font-semibold mb-2 text-[#30518c]">🎗️ Bobinas DRUMP en Cuadrilla</h3>
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm border rounded-lg overflow-hidden">
+        <thead className="bg-gray-100">
+          <tr>
+            <th className="p-2 text-left">Código</th>
+            <th className="p-2 text-left">F. Despacho</th>
+            <th className="p-2 text-left">Guía</th>
+            <th className="p-2 text-right">Metros</th>
+          </tr>
+        </thead>
+        <tbody>
+          {bobinasActivas.map((b) => (
+            <tr key={b.codigo} className="border-t">
+              <td className="p-2">{b.codigo}</td>
+              <td className="p-2">{fmtFecha(b.f_ingreso)}</td>
+              <td className="p-2">{b.guia_despacho || "—"}</td>
+              <td className="p-2 text-right">{b.metros}</td>
+            </tr>
+          ))}
+          <tr className="border-t font-bold bg-gray-50">
+            <td className="p-2 text-right" colSpan={3}>Total:</td>
+            <td className="p-2 text-right">
+              {bobinasActivas.reduce((t, b) => t + (b.metros || 0), 0)} m
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+)}
+
 
         {datosDevolucion.tipo === "Condominio" && (
           <div className="mt-6">
@@ -1122,12 +1312,22 @@ export default function Devolucion() {
                   </div>
                 )}
 
-                {(datosDevolucion.metraje > 0 || datosDevolucion.drump) && (
-                  <div className="grid grid-cols-2 gap-3 text-sm">
-                    {datosDevolucion.drump && <div><b>DRUMP:</b> {datosDevolucion.drump}</div>}
-                    {datosDevolucion.metraje > 0 && <div><b>Metros:</b> {datosDevolucion.metraje} m</div>}
-                  </div>
-                )}
+                {datosDevolucion.tipo === "Residencial" && bobinasSeleccionadas.length > 0 && (
+  <div>
+    <h4 className="font-semibold mb-1 text-sm">DRUMPs ({bobinasSeleccionadas.length})</h4>
+    <ul className="text-sm list-disc pl-5">
+      {bobinasSeleccionadas.map((b) => (
+        <li key={b.codigo}>
+          {b.codigo} — {b.forceCierre ? "bobina completa" : `${b.metraje} m`}
+        </li>
+      ))}
+    </ul>
+    <div className="text-sm mt-1">
+      <b>Total metros:</b>{" "}
+      {bobinasSeleccionadas.reduce((t, x) => t + (x.forceCierre ? 0 : Number(x.metraje || 0)), 0)} m
+    </div>
+  </div>
+)}
 
                 {totalMateriales > 0 && (
                   <div>

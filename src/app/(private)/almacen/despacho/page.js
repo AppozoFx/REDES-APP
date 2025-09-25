@@ -602,6 +602,7 @@ if (tipo === "Residencial" && drumps.length > 0) {
       metros: RES_BOBINA_METROS,
       estado: "activo",
       f_ingreso: serverTimestamp(),
+      guia_despacho: guiaId,
       usuario,
     });
   }

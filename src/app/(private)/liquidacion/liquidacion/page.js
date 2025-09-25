@@ -37,6 +37,20 @@ const useDebounce = (value, delay = 350) => {
   return debounced;
 };
 
+// --- Helpers para cuadrillas K# RESIDENCIAL / K# MOTO ---
+const RX_CUADRILLA = /^K\s?(\d+)\s+(RESIDENCIAL|MOTO)$/i;
+
+const parseCuadrilla = (nombre) => {
+  if (!nombre) return null;
+  const m = String(nombre).trim().match(RX_CUADRILLA);
+  if (!m) return null;
+  return { num: parseInt(m[1], 10), tipo: m[2].toUpperCase() };
+};
+
+// Prioridad de grupo: RESIDENCIAL (0) antes que MOTO (1)
+const groupOrder = (tipo) => (tipo === "RESIDENCIAL" ? 0 : 1);
+
+
 const convertirAFecha = (valor) => {
   if (!valor) return null;
   if (typeof valor?.toDate === "function") return valor.toDate();
@@ -73,7 +87,7 @@ export default function LiquidacionesPage() {
   const [ediciones, setEdiciones] = useState({});
   const [guardandoFila, setGuardandoFila] = useState(null);
 
-  const [sort, setSort] = useState({ key: "fechaInstalacion", dir: "desc" });
+  const [sort, setSort] = useState({ key: "__fechaCuadrilla__", dir: "asc" });
   const [page, setPage] = useState(1);
   const pageSize = 25;
 
@@ -176,57 +190,76 @@ export default function LiquidacionesPage() {
     const deb = (debouncedBusqueda || "").trim().toLowerCase();
 
     const base = liquidaciones.filter((l) => {
-      const f = convertirAFecha(l.fechaInstalacion);
-      if (!f) return false;
-      const fD = dayjs(f);
+       const f = convertirAFecha(l.fechaInstalacion);
+       if (!f) return false;
+       const fD = dayjs(f);
 
-      const coincideMes = fD.format("YYYY-MM") === filtros.mes;
-      const coincideDia = filtros.dia ? fD.format("YYYY-MM-DD") === filtros.dia : true;
+       const coincideMes = fD.format("YYYY-MM") === filtros.mes;
+       const coincideDia = filtros.dia ? fD.format("YYYY-MM-DD") === filtros.dia : true;
 
-      const coincideCuadrilla =
-        filtros.cuadrilla.length > 0 ? filtros.cuadrilla.includes(l.cuadrillaNombre) : true;
+       const coincideCuadrilla =
+         filtros.cuadrilla.length > 0 ? filtros.cuadrilla.includes(l.cuadrillaNombre) : true;
 
-      const coincideTipoCuadrilla =
-        filtros.tipoCuadrilla.length > 0 ? filtros.tipoCuadrilla.includes(l.tipoCuadrilla) : true;
+       const coincideTipoCuadrilla =
+         filtros.tipoCuadrilla.length > 0 ? filtros.tipoCuadrilla.includes(l.tipoCuadrilla) : true;
 
-      const coincideTipoZona =
-        filtros.residencialCondominio.length > 0
-          ? filtros.residencialCondominio.includes(l.residencialCondominio?.toUpperCase())
-          : true;
+       const coincideTipoZona =
+         filtros.residencialCondominio.length > 0
+           ? filtros.residencialCondominio.includes(l.residencialCondominio?.toUpperCase())
+           : true;
 
-      const coincideBusqueda = deb
-        ? (l.codigoCliente || "").toString().toLowerCase().includes(deb) ||
-          (l.cliente || "").toLowerCase().includes(deb)
-        : true;
+       const coincideBusqueda = deb
+         ? (l.codigoCliente || "").toString().toLowerCase().includes(deb) ||
+           (l.cliente || "").toLowerCase().includes(deb)
+         : true;
 
-      const cumplePlanGamer = !filtros.filtrarPlanGamer || l.planGamer !== "";
-      const cumpleKitWifiPro = !filtros.filtrarKitWifiPro || l.kitWifiPro !== "";
-      const cumpleCableado = !filtros.filtrarCableadoMesh || l.servicioCableadoMesh !== "";
+       const cumplePlanGamer = !filtros.filtrarPlanGamer || l.planGamer !== "";
+       const cumpleKitWifiPro = !filtros.filtrarKitWifiPro || l.kitWifiPro !== "";
+       const cumpleCableado = !filtros.filtrarCableadoMesh || l.servicioCableadoMesh !== "";
 
-      const cumpleCat5e =
-        filtros.cat5eFiltro !== ""
-          ? parseIntSafe(l.cat5e) === parseInt(String(filtros.cat5eFiltro), 10)
-          : true;
+       const cumpleCat5e =
+         filtros.cat5eFiltro !== ""
+           ? parseIntSafe(l.cat5e) === parseInt(String(filtros.cat5eFiltro), 10)
+           : true;
 
-      const cumpleObservacion =
-        !filtros.filtrarObservacion || (l.observacion && l.observacion.trim() !== "");
+       const cumpleObservacion =
+         !filtros.filtrarObservacion || (l.observacion && l.observacion.trim() !== "");
 
-      return (
-        coincideMes &&
-        coincideDia &&
-        coincideCuadrilla &&
-        coincideTipoCuadrilla &&
-        coincideTipoZona &&
-        coincideBusqueda &&
-        cumplePlanGamer &&
-        cumpleKitWifiPro &&
-        cumpleCableado &&
-        cumpleCat5e &&
-        cumpleObservacion
-      );
-    });
+      // --- PREFILTRO AUTOMÁTICO: solo cuadrillas K# RESIDENCIAL / K# MOTO ---
+      const pc = parseCuadrilla(l.cuadrillaNombre);
+      if (!pc) return false; // descarta cuadrillas que no siguen el formato
+
+       return (
+         coincideMes &&
+         coincideDia &&
+         coincideCuadrilla &&
+         coincideTipoCuadrilla &&
+         coincideTipoZona &&
+         coincideBusqueda &&
+         cumplePlanGamer &&
+         cumpleKitWifiPro &&
+         cumpleCableado &&
+         cumpleCat5e &&
+         cumpleObservacion
+       );
+     });
 
     const sorted = [...base].sort((a, b) => {
+      // Orden por defecto: fechaInstalacion ASC, luego cuadrilla (RESIDENCIAL→MOTO, K asc)
+      if (sort.key === "__fechaCuadrilla__") {
+        const ta = convertirAFecha(a.fechaInstalacion)?.getTime() ?? 0;
+        const tb = convertirAFecha(b.fechaInstalacion)?.getTime() ?? 0;
+        if (ta !== tb) return ta - tb; // fecha ascendente
+
+        const pa = parseCuadrilla(a.cuadrillaNombre);
+        const pb = parseCuadrilla(b.cuadrillaNombre);
+        const goA = groupOrder(pa?.tipo);
+        const goB = groupOrder(pb?.tipo);
+        if (goA !== goB) return goA - goB;           // RESIDENCIAL primero
+        return (pa?.num ?? 0) - (pb?.num ?? 0);      // número K ascendente
+      }
+
+      // Resto de ordenamientos manuales cuando el usuario hace clic
       const k = sort.key;
       let va = a[k];
       let vb = b[k];
@@ -243,6 +276,8 @@ export default function LiquidacionesPage() {
       if (va > vb) return sort.dir === "asc" ? 1 : -1;
       return 0;
     });
+
+    
 
     return sorted;
   }, [liquidaciones, filtros, debouncedBusqueda, sort]);
@@ -362,53 +397,92 @@ export default function LiquidacionesPage() {
      Exportar Excel
   ========================= */
   const handleExportarExcel = () => {
-    let maxMesh = 0;
-    let maxBox = 0;
-    liquidacionesFiltradas.forEach((l) => {
-      const m = Array.isArray(l.snMESH) ? l.snMESH.filter(Boolean) : [];
-      const b = Array.isArray(l.snBOX) ? l.snBOX.filter(Boolean) : [];
-      maxMesh = Math.max(maxMesh, m.length);
-      maxBox = Math.max(maxBox, b.length);
-    });
-
-    const dataExportar = liquidacionesFiltradas.map((l) => {
+    const dataExportar = liquidacionesFiltradas.map((l, idx) => {
       const fecha = convertirAFecha(l.fechaInstalacion);
       const cat5 = parseIntSafe(l.cat5e);
       const cat6 = parseIntSafe(l.cat6);
       const puntos = cat5 + cat6;
 
-      const snMESH = Array.isArray(l.snMESH) ? l.snMESH.filter(Boolean) : [];
-      const snBOX = Array.isArray(l.snBOX) ? l.snBOX.filter(Boolean) : [];
+      // === Observación de la contrata (según condición solicitada) ===
+      const planTxt = (l.planGamer ?? "").toString().trim();
+      const kitTxt  = (l.kitWifiPro ?? "").toString().trim();
+      const esGamer = planTxt.toUpperCase() === "GAMER" || planTxt.toUpperCase().includes("GAMER");
+      const esKit   = kitTxt.toUpperCase() === "KIT WIFI PRO (AL CONTADO)";
 
-      const meshCols = {};
-      for (let i = 0; i < maxMesh; i++) meshCols[`SN_MESH_${i + 1}`] = valorONulo(snMESH[i]);
+      // Valor de Acta (si algún registro trae array, lo unimos)
+const actaVal = Array.isArray(l.acta)
+  ? l.acta.filter(Boolean).join(", ")
+  : valorONulo(l.acta);
 
-      const boxCols = {};
-      for (let i = 0; i < maxBox; i++) boxCols[`SN_BOX_${i + 1}`] = valorONulo(snBOX[i]);
+      let obsContrata = "";
+      if (cat5 > 0) {
+        const extras = [];
+        if (esGamer) extras.push("Se realizó Plan Gamer Cat.6");
+        if (esKit)   extras.push("KIT WIFI PRO");
+        obsContrata = `Se realizó ${cat5} Cableado UTP Cat.5e${extras.length ? " + " + extras.join(" + ") : ""}`;
+      } else {
+        const extras = [];
+        if (esGamer) extras.push("Se realizó Plan Gamer Cat.6");
+        if (esKit)   extras.push("KIT WIFI PRO");
+        obsContrata = extras.join(" + ");
+      }
+
+      // Tomar hasta 4 SN de MESH/BOX
+      const snMESH = (Array.isArray(l.snMESH) ? l.snMESH : []).filter(Boolean);
+      const snBOX  = (Array.isArray(l.snBOX)  ? l.snBOX  : []).filter(Boolean);
+
+      const meshCols = {
+        "SN_MESH(1)": valorONulo(snMESH[0]),
+        "SN_MESH(2)": valorONulo(snMESH[1]),
+        "SN_MESH(3)": valorONulo(snMESH[2]),
+        "SN_MESH(4)": valorONulo(snMESH[3]),
+      };
+      const boxCols = {
+        "SN_BOX(1)": valorONulo(snBOX[0]),
+        "SN_BOX(2)": valorONulo(snBOX[1]),
+        "SN_BOX(3)": valorONulo(snBOX[2]),
+        "SN_BOX(4)": valorONulo(snBOX[3]),
+      };
+      const cantidadMesh = [snMESH[0], snMESH[1], snMESH[2], snMESH[3]].filter(Boolean).length;
+
+      // Celdas en blanco si el valor es 0 (según pedido)
+      const cat5Cell   = cat5 === 0 ? "" : cat5;
+      const cat6Cell   = cat6 === 0 ? "" : cat6;
+      const puntosCell = puntos === 0 ? "" : puntos;
+
+      // Cableado UTP = Puntos UTP * 25 (si puntos 0, dejamos vacío para consistencia visual)
+      const cableadoUTP = puntos > 0 ? puntos * 25 : "";
 
       return {
-        FechaInstalacion: formatearFecha(fecha),
-        TipoCuadrilla: valorONulo(l.tipoCuadrilla),
-        TipoServicio: valorONulo(l.tipoServicio),
-        Cuadrilla: valorONulo(l.cuadrillaNombre),
-        CodigoCliente: valorONulo(l.codigoCliente),
-        documento: valorONulo(l.documento),
-        Cliente: valorONulo(l.cliente),
-        Direccion: valorONulo(l.direccion),
-        TipoZona: valorONulo(l.residencialCondominio),
-        Plan: valorONulo(l.plan),
-        SN_ONT: valorONulo(l.snONT),
-        proid: valorONulo(l.proidONT),
+        "N°": idx + 1,
+        "Fecha Instalación": formatearFecha(fecha),
+        "Tipo de Servicio": "INSTALACION",
+        "Nombre de Partida": "Ultima Milla",
+        "Cuadrilla": valorONulo(l.cuadrillaNombre),
+        "Acta": actaVal,
+        "Codigo Cliente": valorONulo(l.codigoCliente),
+        "Documento": valorONulo(l.documento),
+        "Cliente": valorONulo(l.cliente),
+        "Direccion": valorONulo(l.direccion),
+        "Tipo Zona": valorONulo(l.residencialCondominio),
+        "Plan": valorONulo(l.plan),
+        "SN_ONT": valorONulo(l.snONT),
+        "proid": valorONulo(l.proidONT ?? l.proid),
         ...meshCols,
         ...boxCols,
-        SN_FONO: valorONulo(l.snFONO),
-        PlanGamer: valorONulo(l.planGamer),
-        KitWifiPro: valorONulo(l.kitWifiPro),
-        ServicioCableadoMesh: valorONulo(l.servicioCableadoMesh),
-        Cat5e: cat5,
-        Cat6: cat6,
-        PuntosUTP: puntos,
-        Observacion: valorONulo(l.observacion),
+        "SN_FONO": valorONulo(l.snFONO),
+        "metraje_instalado": valorONulo(l.metraje_instalado ?? l.metrajeInstalado),
+        "Cantidad mesh": cantidadMesh,
+        "rotuloNapCto": valorONulo(l.rotuloNapCto),
+        "Observacion de la contrata": obsContrata || "",
+        "Cableado UTP (MTS)": cableadoUTP,
+        "Observacion": valorONulo(l.observacion),
+        "Plan Gamer": valorONulo(l.planGamer),
+        "KitWifiPro": valorONulo(l.kitWifiPro),
+        "Servicio Cableado Mesh": valorONulo(l.servicioCableadoMesh),
+        "Cat5e": cat5Cell,
+        "Cat6": cat6Cell,
+        "Puntos UTP": puntosCell,
       };
     });
 
@@ -615,9 +689,9 @@ export default function LiquidacionesPage() {
             <tr className="text-center text-gray-700 font-semibold">
               {[
                 { k: "fechaInstalacion", lbl: "Fecha Instalación", w: "w-40" },
-                { k: "tipoCuadrilla", lbl: "Tipo Cuadrilla", w: "w-40" },
                 { k: "cuadrillaNombre", lbl: "Cuadrilla", w: "w-44" },
                 { k: "codigoCliente", lbl: "Código", w: "w-32" },
+                { k: "documento", lbl: "Documento", w: "w-40" },
                 { k: "cliente", lbl: "Cliente", w: "w-56" },
                 { k: "residencialCondominio", lbl: "R/C", w: "w-36" },
                 { k: "plan", lbl: "Plan", w: "min-w-[240px]" },
@@ -680,38 +754,17 @@ export default function LiquidacionesPage() {
                   <tr key={l.id} className="hover:bg-gray-50 text-center">
                     <td className="border p-2">{formatearFecha(f)}</td>
 
-                    {/* Tipo Cuadrilla */}
-                    <td className="border p-1">
-                      <select
-                        value={ ediciones[l.id]?.tipoCuadrilla ?? l.tipoCuadrilla ?? "" }
-                        className="border rounded px-2 py-1 text-sm"
-                        onChange={(e) => handleEdicionChange(l.id, "tipoCuadrilla", e.target.value)}
-                      >
-                        <option value="">-- Seleccionar --</option>
-                        {opcionesTipoCuadrilla.map((opt) => (
-                          <option key={opt.value} value={opt.value}>
-                            {opt.label}
-                          </option>
-                        ))}
-                      </select>
-                    </td>
-
                     <td className="border p-2">{l.cuadrillaNombre || "-"}</td>
                     <td className="border p-2">{l.codigoCliente || "-"}</td>
+                    <td className="border p-2">{l.documento || "-"}</td>
                     <td className="border p-2">{l.cliente || "-"}</td>
 
                     {/* R/C */}
-                    <td className="border p-1">
-                      <select
-                        value={ ediciones[l.id]?.residencialCondominio ?? l.residencialCondominio ?? "" }
-                        className="border rounded px-2 py-1 text-sm"
-                        onChange={(e) => handleEdicionChange(l.id, "residencialCondominio", e.target.value)}
-                      >
-                        <option value="">-- Seleccionar --</option>
-                        <option value="RESIDENCIAL">RESIDENCIAL</option>
-                        <option value="CONDOMINIO">CONDOMINIO</option>
-                      </select>
-                    </td>
+                    <td className="border p-2">
+   {((ediciones[l.id]?.residencialCondominio ?? l.residencialCondominio) || "-")
+     .toString()
+     .toUpperCase()}
+ </td>
 
                     {/* Plan (badge) */}
                     <td
