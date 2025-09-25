@@ -51,6 +51,9 @@ const ButtonSecondary = ({ children, className = "", ...props }) => (
   </button>
 );
 
+
+
+
 /* ====== Constantes & utils ====== */
 const EQUIP = ["ONT", "MESH", "FONO", "BOX"];
 const emptyCounts = () => ({ ONT: 0, MESH: 0, FONO: 0, BOX: 0 });
@@ -185,6 +188,8 @@ export default function AbastecimientoPage() {
       setCoors(arr);
     })();
   }, []);
+
+  
 
   const coorMap = useMemo(() => {
     const m = {}; for (const c of coors) m[c.id] = c.nombre; return m;
@@ -456,6 +461,32 @@ export default function AbastecimientoPage() {
       "Condo (rollo)": rollo[cu.id] ? "Sí" : "No",
     }));
   }
+
+  /* --- Orden solo por Coordinador --- */
+const [sortDirection, setSortDirection] = useState("asc"); // "asc" | "desc"
+
+function handleSortByCoordinador() {
+  setSortDirection(prev => (prev === "asc" ? "desc" : "asc"));
+}
+
+/* Lista de cuadrillas ordenada por Coordinador */
+const sortedCuadrillas = useMemo(() => {
+  // si no hay cuadrillas, retorna tal cual
+  if (!cuadrillas?.length) return cuadrillas;
+
+  const arr = [...cuadrillas];
+  arr.sort((a, b) => {
+    const aVal = (prettyCoordName(a) || "").toUpperCase();
+    const bVal = (prettyCoordName(b) || "").toUpperCase();
+    if (aVal < bVal) return sortDirection === "asc" ? -1 : 1;
+    if (aVal > bVal) return sortDirection === "asc" ? 1 : -1;
+    return 0;
+  });
+  return arr;
+}, [cuadrillas, sortDirection, coorMap]);
+
+
+  
   function onExportExcel() {
     if (!cuadrillas.length) return;
     const ws = XLSX.utils.json_to_sheet(buildExportRows());
@@ -608,7 +639,17 @@ export default function AbastecimientoPage() {
           <table className="min-w-full text-sm">
             <thead className="sticky top-0 bg-gray-50">
               <tr className="text-left">
-                <th className="py-2 px-3">Coordinador</th>
+                <th
+  className="py-2 px-3 cursor-pointer select-none"
+  onClick={handleSortByCoordinador}
+  title="Ordenar por Coordinador"
+>
+  Coordinador{" "}
+  <span className="inline-block w-4 text-gray-500">
+    {sortDirection === "asc" ? "▲" : "▼"}
+  </span>
+</th>
+
                 <th className="py-2 px-3">Cuadrilla</th>
                 <th className="py-2 px-3">Liquidadas (ONT/MESH/FONO/BOX)</th>
                 <th className="py-2 px-3">Objetivo</th>
@@ -625,7 +666,7 @@ export default function AbastecimientoPage() {
               {cuadrillas.length === 0 && (
                 <tr><td className="py-6 px-3 text-center text-gray-500" colSpan={11}>Usa los filtros para cargar cuadrillas.</td></tr>
               )}
-              {cuadrillas.map(cu => {
+              {sortedCuadrillas.map(cu => {
                 const nombre = cu.nombre || cu.id;
                 const key = keyName(nombre);
                 const cons = consumoPorCuadrilla[key] || emptyCounts();
