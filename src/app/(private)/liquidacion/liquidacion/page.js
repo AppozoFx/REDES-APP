@@ -150,21 +150,22 @@ export default function LiquidacionesPage() {
     obtenerLiquidaciones();
   }, [filtros.mes]);
 
-  const obtenerLiquidaciones = async () => {
-    setCargando(true);
-    try {
-      const ref = collection(db, "liquidacion_instalaciones");
-      const snapshot = await getDocs(ref);
-      const data = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
-      setLiquidaciones(data);
-    } catch (e) {
-      console.error(e);
-      toast.error("Error al obtener las liquidaciones");
-    } finally {
-      setCargando(false);
-      setPage(1);
-    }
-  };
+  const obtenerLiquidaciones = async ({ keepPage = false } = {}) => {
+  setCargando(true);
+  try {
+    const ref = collection(db, "liquidacion_instalaciones");
+    const snapshot = await getDocs(ref);
+    const data = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
+    setLiquidaciones(data);
+  } catch (e) {
+    console.error(e);
+    toast.error("Error al obtener las liquidaciones");
+  } finally {
+    setCargando(false);
+    if (!keepPage) setPage(1); // ✅ no cambies de página cuando keepPage=true
+  }
+};
+
 
   /* =========================
      Opciones select
@@ -213,9 +214,19 @@ export default function LiquidacionesPage() {
            (l.cliente || "").toLowerCase().includes(deb)
          : true;
 
-       const cumplePlanGamer = !filtros.filtrarPlanGamer || l.planGamer !== "";
-       const cumpleKitWifiPro = !filtros.filtrarKitWifiPro || l.kitWifiPro !== "";
-       const cumpleCableado = !filtros.filtrarCableadoMesh || l.servicioCableadoMesh !== "";
+      // --- Grupo OR: Gamer / WifiPro / Cableado ---
+// Si no hay ningún check marcado -> no filtra por este grupo.
+const hayFiltroAddons =
+  filtros.filtrarPlanGamer || filtros.filtrarKitWifiPro || filtros.filtrarCableadoMesh;
+
+const cumpleGrupoAddons = !hayFiltroAddons
+  ? true
+  : (
+      (filtros.filtrarPlanGamer && !!(l.planGamer && String(l.planGamer).trim() !== "")) ||
+      (filtros.filtrarKitWifiPro && !!(l.kitWifiPro && String(l.kitWifiPro).trim() !== "")) ||
+      (filtros.filtrarCableadoMesh && !!(l.servicioCableadoMesh && String(l.servicioCableadoMesh).trim() !== ""))
+    );
+
 
        const cumpleCat5e =
          filtros.cat5eFiltro !== ""
@@ -225,24 +236,18 @@ export default function LiquidacionesPage() {
        const cumpleObservacion =
          !filtros.filtrarObservacion || (l.observacion && l.observacion.trim() !== "");
 
-      // --- PREFILTRO AUTOMÁTICO: solo cuadrillas K# RESIDENCIAL / K# MOTO ---
-      const pc = parseCuadrilla(l.cuadrillaNombre);
-      if (!pc) return false; // descarta cuadrillas que no siguen el formato
-
-       return (
-         coincideMes &&
-         coincideDia &&
-         coincideCuadrilla &&
-         coincideTipoCuadrilla &&
-         coincideTipoZona &&
-         coincideBusqueda &&
-         cumplePlanGamer &&
-         cumpleKitWifiPro &&
-         cumpleCableado &&
-         cumpleCat5e &&
-         cumpleObservacion
-       );
-     });
+      return (
+        coincideMes &&
+        coincideDia &&
+        coincideCuadrilla &&
+        coincideTipoCuadrilla &&
+        coincideTipoZona &&
+        coincideBusqueda &&
+        cumpleGrupoAddons &&
+        cumpleCat5e &&
+        cumpleObservacion
+      );
+    });
 
     const sorted = [...base].sort((a, b) => {
       // Orden por defecto: fechaInstalacion ASC, luego cuadrilla (RESIDENCIAL→MOTO, K asc)
@@ -678,6 +683,20 @@ const actaVal = Array.isArray(l.acta)
               />
               📝 Con observación
             </label>
+
+            {/* ✅ Botón de refrescar, pegado a la derecha */}
+    <div className="ml-auto">
+      <button
+        onClick={() => obtenerLiquidaciones({ keepPage: true })}
+        disabled={cargando}
+        className="bg-sky-600 hover:bg-sky-700 disabled:opacity-60 text-white text-sm px-4 py-2 rounded shadow"
+        title="Recargar datos sin perder filtros"
+      >
+        {cargando ? "Actualizando…" : "🔄 Refrescar tabla"}
+      </button>
+    </div>
+
+
           </div>
         </div>
       </div>
