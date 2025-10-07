@@ -33,12 +33,12 @@ const Popup = dynamic(
   () => import("react-leaflet").then((m) => ({ default: m.Popup })),
   { ssr: false }
 );
-
-/* Cluster (legacy lib) */
-const MarkerClusterGroup = dynamic(
-  () => import("react-leaflet-markercluster").then((m) => m.default),
+const Tooltip = dynamic(
+  () => import("react-leaflet").then((m) => ({ default: m.Tooltip })),
   { ssr: false }
 );
+
+
 
 /* Paleta: Agendada = negro */
 const colorByEstado = {
@@ -320,15 +320,6 @@ export default function MapaInstalaciones() {
           >
             <TileLayer key={base} attribution={baseLayers[base].attr} url={baseLayers[base].url} />
 
-            {/* Remount cluster al cambiar filtros */}
-            <MarkerClusterGroup
-              key={clusterKey}
-              chunkedLoading
-              spiderfyOnMaxZoom
-              showCoverageOnHover={false}
-              zoomToBoundsOnClick
-              iconCreateFunction={createClusterIcon}
-            >
               {instalacionesFiltradas.map((i) => {
                 const { lat, lng } = i.coordenadas || {};
                 if (!lat || !lng) return null;
@@ -344,6 +335,15 @@ export default function MapaInstalaciones() {
 
                 return (
                   <Marker key={i.id} position={[lat, lng]} icon={createCircleIcon(color)}>
+                    <Tooltip
+    permanent
+    direction="top"
+    offset={[0, -14]}
+    opacity={1}
+    className="cloud-tooltip"
+  >
+    {(i.cuadrillaNombre || i.cuadrilla || "—").toUpperCase()}
+  </Tooltip>
                     <Popup maxWidth={380}>
                       <div className="text-xs text-gray-900 dark:text-gray-100">
                         <div className="rounded-xl border p-3 bg-white dark:bg-gray-800 shadow-sm">
@@ -430,7 +430,6 @@ export default function MapaInstalaciones() {
                   </Marker>
                 );
               })}
-            </MarkerClusterGroup>
           </MapContainer>
         )}
       </div>
