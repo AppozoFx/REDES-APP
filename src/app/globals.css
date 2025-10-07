@@ -135,3 +135,14 @@
 }
 .soft-scrollbar { scrollbar-width: thin; scrollbar-color: rgba(48,81,140,.45) transparent; }
 
+.leaflet-tooltip.cloud-tooltip {
+    background: rgba(255,255,255,0.95);
+    color: #111827;               /* gris oscuro */
+    border: 1px solid rgba(0,0,0,0.1);
+    border-radius: 9999px;        /* forma de “pastilla” */
+    padding: 4px 8px;
+    box-shadow: 0 2px 8px rgba(0,0,0,.15);
+    font-weight: 700;
+    font-size: 12px;
+  }
+  
