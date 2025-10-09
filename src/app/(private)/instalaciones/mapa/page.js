@@ -3,7 +3,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { db } from "@/firebaseConfig";
-import { collection, getDocs } from "firebase/firestore";
+import { collection, getDocs, onSnapshot } from "firebase/firestore";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/app/context/AuthContext";
 import dynamic from "next/dynamic";
@@ -35,6 +35,12 @@ const Popup = dynamic(
 );
 const Tooltip = dynamic(
   () => import("react-leaflet").then((m) => ({ default: m.Tooltip })),
+  { ssr: false }
+);
+
+// Cluster group (SSR off)
+const MarkerClusterGroup = dynamic(
+  () => import("react-leaflet-markercluster").then((m) => ({ default: m.default || m })),
   { ssr: false }
 );
 
@@ -80,6 +86,37 @@ const createClusterIcon = (cluster) => {
   });
 };
 
+// Iconos para cuadrillas en tiempo real
+const iconCondominio = new L.Icon({
+  iconUrl: "/image/condominio.png",
+  iconSize: [36, 36],
+  iconAnchor: [18, 34],
+  popupAnchor: [0, -28],
+});
+
+const iconResidencial = new L.Icon({
+  iconUrl: "/image/residencial.png",
+  iconSize: [36, 36],
+  iconAnchor: [18, 34],
+  popupAnchor: [0, -28],
+});
+
+// Icono con pulso para destacar cuadrillas en tiempo real
+const createCuadrillaIcon = (esCondominio) =>
+  new L.DivIcon({
+    html: `
+      <div class="cuad-marker">
+        <span class="pulse"></span>
+        <span class="pulse pulse2"></span>
+        <img src="/image/${esCondominio ? "condominio" : "residencial"}.png" alt="cuadrilla" />
+      </div>
+    `,
+    className: "",
+    iconSize: [52, 52],
+    iconAnchor: [26, 42],
+    popupAnchor: [0, -34],
+  });
+
 const EstadoPill = ({ estado }) => {
   const bg = colorByEstado[estado] || colorByEstado.default;
   return (
@@ -107,6 +144,10 @@ export default function MapaInstalaciones() {
   const mapRef = useRef(null);
 
   const [instalaciones, setInstalaciones] = useState([]);
+  // Info de cuadrillas (nombre, categoria, etc.)
+  const [cuadrillasInfo, setCuadrillasInfo] = useState({});
+  // Ubicaciones en tiempo real por cuadrilla { [id]: { lat, lng, tipo, updatedAt } }
+  const [ubicacionesCuadrillas, setUbicacionesCuadrillas] = useState({});
   const [filtroCuadrilla, setFiltroCuadrilla] = useState("");
   const [filtroEstado, setFiltroEstado] = useState("");
   const [fechaFiltro, setFechaFiltro] = useState(() => dayjs().format("YYYY-MM-DD"));
@@ -156,6 +197,29 @@ export default function MapaInstalaciones() {
     })();
   }, []);
 
+  // Suscripción en tiempo real: datos base de cuadrillas y su última ubicación (campos lat/lng/lastLocationAt en el doc)
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "cuadrillas"), (snap) => {
+      const info = {};
+      const ubic = {};
+      snap.forEach((d) => {
+        const data = d.data() || {};
+        info[d.id] = { id: d.id, ...data };
+
+        const lat = typeof data.lat === "number" ? data.lat : Number(data.lat);
+        const lng = typeof data.lng === "number" ? data.lng : Number(data.lng);
+        if (!Number.isNaN(lat) && !Number.isNaN(lng)) {
+          const updatedAt = data.lastLocationAt || data.updatedAt || null;
+          const tipoUbicacion = data.categoria || data.tipo || "";
+          ubic[d.id] = { lat, lng, tipo: tipoUbicacion, updatedAt };
+        }
+      });
+      setCuadrillasInfo(info);
+      setUbicacionesCuadrillas(ubic);
+    });
+    return () => unsub();
+  }, []);
+
   useEffect(() => {
     recalcHeight();
     window.addEventListener("resize", recalcHeight);
@@ -199,20 +263,28 @@ export default function MapaInstalaciones() {
   // Forzar remount del cluster al cambiar filtros
   const clusterKey = `${filtroCuadrilla}|${filtroEstado}|${fechaFiltro}`;
 
-  // Ajuste de bounds
+  // Ajuste de bounds (instalaciones + cuadrillas en tiempo real)
   useEffect(() => {
     if (!mapRef.current) return;
     const bounds = new L.LatLngBounds([]);
+
+    // Instalaciones filtradas
     instalacionesFiltradas.forEach((i) => {
       const { lat, lng } = i.coordenadas || {};
       if (lat && lng) bounds.extend([lat, lng]);
     });
-    if (bounds.isValid() && instalacionesFiltradas.length > 0) {
+
+    // Ubicaciones de cuadrillas en tiempo real
+    Object.values(ubicacionesCuadrillas || {}).forEach((p) => {
+      if (p?.lat && p?.lng) bounds.extend([p.lat, p.lng]);
+    });
+
+    if (bounds.isValid()) {
       setTimeout(() => {
         mapRef.current.fitBounds(bounds, { padding: [60, 60] });
       }, 120);
     }
-  }, [instalacionesFiltradas]);
+  }, [instalacionesFiltradas, ubicacionesCuadrillas]);
 
   const limpiarFiltros = () => {
     setFiltroCuadrilla("");
@@ -230,6 +302,29 @@ export default function MapaInstalaciones() {
 
   return (
     <div className="p-4 overflow-hidden flex flex-col gap-3 min-h-0 bg-white text-gray-900 dark:bg-[#0f172a] dark:text-gray-100">
+      <style>{`
+        .cuad-marker { position: relative; width: 52px; height: 52px; }
+        .cuad-marker img { width: 48px; height: 48px; filter: drop-shadow(0 6px 12px rgba(0,0,0,0.4)); }
+        .cuad-marker .pulse {
+          position: absolute; top: 50%; left: 50%; width: 16px; height: 16px;
+          margin-left: -8px; margin-top: -8px; border-radius: 9999px;
+          background: rgba(16,185,129,0.7); box-shadow: 0 0 0 0 rgba(16,185,129,0.45);
+          animation: pulse-cq 1.8s ease-out infinite;
+        }
+        .cuad-marker .pulse2 { animation-delay: .75s; opacity: .9; }
+        @keyframes pulse-cq {
+          0% { transform: scale(1); opacity: 0.95; }
+          70% { transform: scale(4.5); opacity: 0; }
+          100% { opacity: 0; }
+        }
+        /* Tooltip transparente y redondeado para cuadrillas */
+        .leaflet-tooltip.cuad-tooltip {
+          background: transparent; border: 0; box-shadow: none; pointer-events: none;
+          border-radius: 12px; padding: 4px 8px; font-weight: 700; letter-spacing: .3px;
+          color: #111; text-shadow: 0 1px 2px rgba(255,255,255,0.8), 0 1px 2px rgba(0,0,0,0.25);
+        }
+        .dark .leaflet-tooltip.cuad-tooltip { color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,0.6); }
+      `}</style>
       {/* Encabezado */}
       <header className="flex items-center justify-between gap-4">
         <div>
@@ -430,6 +525,81 @@ export default function MapaInstalaciones() {
                   </Marker>
                 );
               })}
+
+              <MarkerClusterGroup
+                chunkedLoading
+                showCoverageOnHover={false}
+                spiderfyOnEveryZoom
+                spiderfyOnMaxZoom
+                spiderLegPolylineOptions={{ weight: 3, color: '#10b981', opacity: 0.85 }}
+                spiderfyDistanceMultiplier={2}
+                iconCreateFunction={createClusterIcon}
+              >
+                {Object.entries(ubicacionesCuadrillas).map(([id, p]) => {
+                  if (!p?.lat || !p?.lng) return null;
+                  const info = cuadrillasInfo[id] || {};
+                  const categoria = String(info.categoria || p.tipo || "").toLowerCase();
+                  const esCondominio = categoria.includes("condominio");
+                  const nombre = info.nombre || info.id || id;
+                  const fechaTxt = (() => {
+                    try {
+                      if (!p.updatedAt) return "";
+                      if (typeof p.updatedAt?.toDate === "function") {
+                        return dayjs(p.updatedAt.toDate()).format("DD/MM HH:mm");
+                      }
+                      if (typeof p.updatedAt === "number") {
+                        return dayjs(p.updatedAt).format("DD/MM HH:mm");
+                      }
+                      if (typeof p.updatedAt === "string") {
+                        return String(p.updatedAt);
+                      }
+                    } catch (_) {}
+                    return "";
+                  })();
+
+                  return (
+                    <Marker
+                      key={`c-${id}`}
+                      position={[p.lat, p.lng]}
+                      icon={createCuadrillaIcon(esCondominio)}
+                      zIndexOffset={1000}
+                    >
+                    <Tooltip permanent direction="top" offset={[0, -16]} opacity={1} className="cuad-tooltip">
+                      {nombre?.toUpperCase?.() || String(nombre)}
+                    </Tooltip>
+                      <Popup maxWidth={320}>
+                        <div className="text-xs text-gray-900 dark:text-gray-100">
+                          <div className="font-semibold mb-1">{nombre}</div>
+                          <div className="mb-2">Categoría: {info.categoria || p.tipo || "-"}</div>
+                          {fechaTxt && (
+                            <div className="text-gray-500">Actualizado: {fechaTxt}</div>
+                          )}
+                          <div className="flex items-center justify-center gap-2 pt-2">
+                            <a
+                              href={`https://www.google.com/maps/search/?api=1&query=${p.lat},${p.lng}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="px-3 py-1.5 rounded-md font-semibold shadow-md hover:shadow-lg transition"
+                              style={{ background: "#2563eb", color: "#ffffff" }}
+                            >
+                              Google Maps
+                            </a>
+                            <a
+                              href={`https://waze.com/ul?ll=${p.lat},${p.lng}&navigate=yes`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="px-3 py-1.5 rounded-md font-semibold shadow-md hover:shadow-lg transition"
+                              style={{ background: "#7c3aed", color: "#ffffff" }}
+                            >
+                              Waze
+                            </a>
+                          </div>
+                        </div>
+                      </Popup>
+                    </Marker>
+                  );
+                })}
+              </MarkerClusterGroup>
           </MapContainer>
         )}
       </div>
