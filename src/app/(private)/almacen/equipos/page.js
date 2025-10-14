@@ -45,6 +45,7 @@ export default function EquiposEditable() {
   const [editandoId, setEditandoId] = useState(null);
 
   const [filtro, setFiltro] = useState("");
+  const [busqueda, setBusqueda] = useState("");
   const [filtroEstado, setFiltroEstado] = useState("");
   const [filtroUbicacion, setFiltroUbicacion] = useState("");
   const [filtroPriTec, setFiltroPriTec] = useState("");
@@ -57,6 +58,59 @@ export default function EquiposEditable() {
   const { userData } = useAuth();
 
   const opcionesExtra = ["garantía", "avería", "robo", "pérdida"];
+
+  // Debounce de búsqueda para no filtrar en cada tecla
+  useEffect(() => {
+    const id = setTimeout(() => setFiltro(busqueda), 250);
+    return () => clearTimeout(id);
+  }, [busqueda]);
+
+  // Estados de paginación
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(100);
+
+  // Resetear página al cambiar filtros
+  useEffect(() => {
+    setPage(1);
+  }, [
+    filtro,
+    filtroEstado,
+    filtroUbicacion,
+    filtroPriTec,
+    filtroTecLiq,
+    filtroInv,
+    filtroAlerta,
+  ]);
+
+  // Mapas memoizados para accesos O(1)
+  const mapCuadrillasPorNombre = useMemo(() => {
+    const m = new Map();
+    (cuadrillas || []).forEach((c) => {
+      if (c?.nombre) m.set(c.nombre, c);
+    });
+    return m;
+  }, [cuadrillas]);
+
+  const mapUsuarioPorUid = useMemo(() => {
+    const m = new Map();
+    (usuarios || []).forEach((u) => {
+      if (u?.uid) m.set(u.uid, u);
+    });
+    return m;
+  }, [usuarios]);
+
+  // Valores únicos precalculados
+  const estadosDisponibles = useMemo(() => {
+    return [...new Set((equipos || []).map((e) => e.estado).filter(Boolean))];
+  }, [equipos]);
+
+  const opcionesUbicacionBase = useMemo(() => {
+    const nombresCuadrillas = (cuadrillas || [])
+      .map((c) => c.nombre)
+      .filter(Boolean);
+    const base = [...nombresCuadrillas, ...opcionesExtra];
+    return [...new Set(base)].sort((a, b) => a.localeCompare(b));
+  }, [cuadrillas]);
 
   // 🚀 Cargar equipos (todo, igual que tu versión)
   const cargarEquipos = async () => {
@@ -85,7 +139,7 @@ export default function EquiposEditable() {
 
   // 📊 Filtro simple por SN o tipo de equipo
   const filtrarEquipos = useMemo(() => {
-    const q = filtro.toLowerCase();
+    const q = (filtro || "").toLowerCase();
     return equipos.filter(
       (e) =>
         (e.SN?.toLowerCase().includes(q) ||
@@ -137,6 +191,15 @@ export default function EquiposEditable() {
     }
     return filtrarEquiposUnicos;
   }, [filtrarEquiposUnicos, filtro, filtroEstado, filtroUbicacion]);
+
+  // Paginación derivada
+  const totalFiltrados = equiposParaTabla.length;
+  const totalPaginas = Math.max(1, Math.ceil(totalFiltrados / pageSize));
+  const equiposPaginados = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    const end = start + pageSize;
+    return equiposParaTabla.slice(start, end);
+  }, [equiposParaTabla, page, pageSize]);
 
   // 🧮 Stock por cuadrilla (agregado). Usa increment y marca kind:"counter"
   const actualizarStockCuadrilla = async (nombreCuadrilla, cantidad, tipoEquipo) => {
@@ -203,12 +266,12 @@ export default function EquiposEditable() {
         : equipo.tecnicos;
     }
 
-    const cuadrilla = cuadrillas.find((c) => c.nombre === equipo.ubicacion);
+    const cuadrilla = mapCuadrillasPorNombre.get(equipo.ubicacion);
     if (!cuadrilla || !cuadrilla.tecnicos) return "-";
 
     const nombres = cuadrilla.tecnicos
       .map((uid) => {
-        const usuario = usuarios.find((u) => u.uid === uid);
+        const usuario = mapUsuarioPorUid.get(uid);
         return usuario ? `${usuario.nombres} ${usuario.apellidos}` : null;
       })
       .filter(Boolean);
@@ -218,10 +281,12 @@ export default function EquiposEditable() {
 
   // 📍 Opciones de ubicación
   const generarOpcionesUbicacion = (ubicacionActual) => {
-    const nombresCuadrillas = cuadrillas.map((c) => c.nombre).filter(Boolean);
-    const baseOpciones = [...nombresCuadrillas, ...opcionesExtra];
-    if (ubicacionActual === "almacen") baseOpciones.push("almacen");
-    return [...new Set(baseOpciones)].sort((a, b) => a.localeCompare(b));
+    if (ubicacionActual === "almacen") {
+      return opcionesUbicacionBase.includes("almacen")
+        ? opcionesUbicacionBase
+        : [...opcionesUbicacionBase, "almacen"];
+    }
+    return opcionesUbicacionBase;
   };
 
   // 📝 Edición
@@ -560,8 +625,8 @@ export default function EquiposEditable() {
       <div className="mb-4 flex flex-wrap gap-4">
         {/* Buscar por SN o Tipo */}
         <Input
-          value={filtro}
-          onChange={(e) => setFiltro(e.target.value)}
+          value={busqueda}
+          onChange={(e) => setBusqueda(e.target.value)}
           placeholder="🔍 Buscar SN o tipo de equipo"
           className="w-full max-w-xs"
         />
@@ -573,13 +638,11 @@ export default function EquiposEditable() {
           className="rounded border px-3 py-2"
         >
           <option value="">Estado</option>
-          {[...new Set(equipos.map((e) => e.estado).filter(Boolean))].map(
-            (estado, idx) => (
-              <option key={idx} value={estado}>
-                {estado}
-              </option>
-            )
-          )}
+          {estadosDisponibles.map((estado, idx) => (
+            <option key={idx} value={estado}>
+              {estado}
+            </option>
+          ))}
         </select>
 
         {/* Ubicación */}
@@ -647,12 +710,14 @@ export default function EquiposEditable() {
           className="flex items-center gap-2 rounded-full bg-[#30518c] px-4 py-2 font-semibold text-white shadow transition hover:bg-[#27406f]"
           onClick={() => {
             setFiltro("");
+            setBusqueda("");
             setFiltroEstado("");
             setFiltroUbicacion("");
             setFiltroPriTec("");
             setFiltroTecLiq("");
             setFiltroInv("");
             setFiltroAlerta(false);
+            setPage(1);
           }}
         >
           🧹 Limpiar filtros
@@ -725,6 +790,45 @@ export default function EquiposEditable() {
         </div>
       )}
 
+      {/* Paginación y tamaño de página */}
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-3 text-sm text-gray-700">
+        <div>
+          Mostrando {Math.min(totalFiltrados, (page - 1) * pageSize + 1)}-
+          {Math.min(totalFiltrados, page * pageSize)} de {totalFiltrados}
+        </div>
+        <div className="flex items-center gap-2">
+          <label>Tamaño página</label>
+          <select
+            className="rounded border px-2 py-1"
+            value={pageSize}
+            onChange={(e) => setPageSize(parseInt(e.target.value) || 50)}
+          >
+            {[25, 50, 100, 200, 500].map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </select>
+          <button
+            className="rounded border px-2 py-1 disabled:opacity-50"
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            disabled={page <= 1}
+          >
+            ‹ Anterior
+          </button>
+          <span>
+            Página {page} / {totalPaginas}
+          </span>
+          <button
+            className="rounded border px-2 py-1 disabled:opacity-50"
+            onClick={() => setPage((p) => Math.min(totalPaginas, p + 1))}
+            disabled={page >= totalPaginas}
+          >
+            Siguiente ›
+          </button>
+        </div>
+      </div>
+
       <div className="max-h-[80vh] overflow-auto rounded border">
         <table className="min-w-[1500px] text-sm">
           <thead className="sticky top-0 bg-gray-100">
@@ -747,7 +851,7 @@ export default function EquiposEditable() {
             </tr>
           </thead>
           <tbody>
-            {equiposParaTabla.map((e) => (
+            {equiposPaginados.map((e) => (
               <tr key={`row-${e.id}-${e.SN || ""}`} className="border-t">
                 <td className="p-2 font-mono">{e.SN}</td>
                 <td className="p-2">{parseFecha(e.f_despacho)}</td>
