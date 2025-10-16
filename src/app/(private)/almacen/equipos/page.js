@@ -43,6 +43,7 @@ export default function EquiposEditable() {
   const [usuarios, setUsuarios] = useState([]);
   const [editing, setEditing] = useState({});
   const [editandoId, setEditandoId] = useState(null);
+  const [accionando, setAccionando] = useState({});
 
   const [filtro, setFiltro] = useState("");
   const [busqueda, setBusqueda] = useState("");
@@ -250,6 +251,44 @@ export default function EquiposEditable() {
     cargarEquipos();
   }, []);
 
+  // Auto-marcar auditoría como "sustentada" cuando requiere=true y existen fotoPath y fotoURL
+  useEffect(() => {
+    const pendientes = (equipos || []).filter(
+      (e) =>
+        e?.auditoria?.requiere === true &&
+        e?.auditoria?.estado !== "sustentada" &&
+        typeof e?.auditoria?.fotoPath === "string" && e.auditoria.fotoPath.trim() !== "" &&
+        typeof e?.auditoria?.fotoURL === "string" && e.auditoria.fotoURL.trim() !== ""
+    );
+
+    if (pendientes.length === 0) return;
+
+    (async () => {
+      try {
+        await Promise.all(
+          pendientes.map((eq) =>
+            updateDoc(doc(db, "equipos", eq.id), {
+              "auditoria.estado": "sustentada",
+              "auditoria.actualizadoEn": serverTimestamp(),
+            })
+          )
+        );
+
+        // Reflejar inmediatamente en estado local
+        const ids = new Set(pendientes.map((p) => p.id));
+        setEquipos((prev) =>
+          prev.map((e) =>
+            ids.has(e.id)
+              ? { ...e, auditoria: { ...(e.auditoria || {}), estado: "sustentada" } }
+              : e
+          )
+        );
+      } catch (err) {
+        console.error("Error auto-marcando auditoría sustentada:", err);
+      }
+    })();
+  }, [equipos]);
+
   // 🗓️ Formatear fechas
   const parseFecha = (val) => {
     if (!val) return "";
@@ -415,6 +454,108 @@ export default function EquiposEditable() {
     } catch (error) {
       toast.error("Error al guardar");
       console.error(error);
+    }
+  };
+
+  // Marcar que este equipo requiere sustentación (auditoría)
+  const marcarSustentacion = async (equipo) => {
+    try {
+      if (!equipo?.id) return;
+      if (!equipo?.SN) {
+        toast.error("El equipo no tiene SN para auditoría");
+        return;
+      }
+      setAccionando((p) => ({ ...p, [equipo.id]: true }));
+
+      const fotoPath = `auditoria/${equipo.SN}.jpg`;
+      await setDoc(
+        doc(db, "equipos", equipo.id),
+        {
+          auditoria: {
+            requiere: true,
+            estado: "pendiente",
+            fotoPath,
+            fotoURL: equipo?.auditoria?.fotoURL || "",
+            marcadoPor: userData?.uid || "",
+            actualizadoEn: serverTimestamp(),
+          },
+        },
+        { merge: true }
+      );
+
+      setEquipos((prev) =>
+        prev.map((e) =>
+          e.id === equipo.id
+            ? {
+                ...e,
+                auditoria: {
+                  ...e.auditoria,
+                  requiere: true,
+                  estado: "pendiente",
+                  fotoPath,
+                  fotoURL: e?.auditoria?.fotoURL || "",
+                  marcadoPor: userData?.uid || "",
+                },
+              }
+            : e
+        )
+      );
+      toast.success("Marcado para sustentar");
+    } catch (err) {
+      console.error(err);
+      toast.error("No se pudo marcar");
+    } finally {
+      setAccionando((p) => {
+        const n = { ...p };
+        delete n[equipo.id];
+        return n;
+      });
+    }
+  };
+
+  // Quitar requerimiento de sustentación (auditoría)
+  const quitarSustentacion = async (equipo) => {
+    try {
+      if (!equipo?.id) return;
+      setAccionando((p) => ({ ...p, [equipo.id]: true }));
+
+      await setDoc(
+        doc(db, "equipos", equipo.id),
+        {
+          auditoria: {
+            ...(equipo?.auditoria || {}),
+            requiere: false,
+            estado: "pendiente",
+            actualizadoEn: serverTimestamp(),
+          },
+        },
+        { merge: true }
+      );
+
+      setEquipos((prev) =>
+        prev.map((e) =>
+          e.id === equipo.id
+            ? {
+                ...e,
+                auditoria: {
+                  ...(e?.auditoria || {}),
+                  requiere: false,
+                  estado: "pendiente",
+                },
+              }
+            : e
+        )
+      );
+      toast.success("Sustentación quitada");
+    } catch (err) {
+      console.error(err);
+      toast.error("No se pudo quitar");
+    } finally {
+      setAccionando((p) => {
+        const n = { ...p };
+        delete n[equipo.id];
+        return n;
+      });
     }
   };
 
@@ -969,6 +1110,35 @@ export default function EquiposEditable() {
                       <span>✏️</span> Editar
                     </Button>
                   )}
+                  <div className="flex flex-wrap items-center gap-2 mt-1">
+                    {e?.auditoria?.estado === "sustentada" ? (
+                      <Button
+                        size="sm"
+                        disabled
+                        className="rounded-lg bg-emerald-600 px-3 py-1 text-white"
+                      >
+                        Sustentada
+                      </Button>
+                    ) : e?.auditoria?.requiere === true ? (
+                      <Button
+                        size="sm"
+                        disabled={!!accionando[e.id]}
+                        className="rounded-lg bg-red-500 px-3 py-1 text-white hover:bg-red-600 disabled:opacity-60"
+                        onClick={() => quitarSustentacion(e)}
+                      >
+                        Quitar
+                      </Button>
+                    ) : (
+                      <Button
+                        size="sm"
+                        disabled={!!accionando[e.id] || !e?.SN}
+                        className="rounded-lg bg-amber-500 px-3 py-1 text-white hover:bg-amber-600 disabled:opacity-60"
+                        onClick={() => marcarSustentacion(e)}
+                      >
+                        Sustentar
+                      </Button>
+                    )}
+                  </div>
                 </td>
               </tr>
             ))}
