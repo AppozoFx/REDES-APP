@@ -415,6 +415,21 @@ export default function MapaInstalaciones() {
           >
             <TileLayer key={base} attribution={baseLayers[base].attr} url={baseLayers[base].url} />
 
+
+
+              {/* ORDERS / INSTALACIONES agrupadas */}
+<MarkerClusterGroup
+  key={`inst-${clusterKey}`}
+  chunkedLoading
+  showCoverageOnHover={false}
+  spiderfyOnEveryZoom
+  spiderfyOnMaxZoom
+  spiderLegPolylineOptions={{ weight: 3, color: '#2563eb', opacity: 0.85 }}
+  spiderfyDistanceMultiplier={1.6}
+  iconCreateFunction={createClusterIcon}
+>
+
+
               {instalacionesFiltradas.map((i) => {
                 const { lat, lng } = i.coordenadas || {};
                 if (!lat || !lng) return null;
@@ -431,14 +446,14 @@ export default function MapaInstalaciones() {
                 return (
                   <Marker key={i.id} position={[lat, lng]} icon={createCircleIcon(color)}>
                     <Tooltip
-    permanent
-    direction="top"
-    offset={[0, -14]}
-    opacity={1}
-    className="cloud-tooltip"
-  >
-    {(i.cuadrillaNombre || i.cuadrilla || "—").toUpperCase()}
-  </Tooltip>
+                          permanent
+                          direction="top"
+                          offset={[0, -14]}
+                          opacity={1}
+                          className="cloud-tooltip"
+                                  >
+                                    {(i.cuadrillaNombre || i.cuadrilla || "—").toUpperCase()}
+                                  </Tooltip>
                     <Popup maxWidth={380}>
                       <div className="text-xs text-gray-900 dark:text-gray-100">
                         <div className="rounded-xl border p-3 bg-white dark:bg-gray-800 shadow-sm">
@@ -525,6 +540,8 @@ export default function MapaInstalaciones() {
                   </Marker>
                 );
               })}
+              </MarkerClusterGroup>
+              
 
               <MarkerClusterGroup
                 chunkedLoading
