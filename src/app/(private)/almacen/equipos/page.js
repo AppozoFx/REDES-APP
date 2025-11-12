@@ -3,6 +3,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/app/context/AuthContext";
+
 import {
   addDoc,
   collection,
@@ -16,14 +17,95 @@ import {
   serverTimestamp,
   deleteDoc,
   increment,
+  deleteField, // 👈 añadido aquí, así no se repite
 } from "firebase/firestore";
-import { db } from "@/firebaseConfig";
+
+import { ref, deleteObject } from "firebase/storage";
+
+import { db, storage } from "@/firebaseConfig"; // 👈 ambos juntos, una sola vez
+
 import { Input } from "@/app/components/ui/input";
 import { Button } from "@/app/components/ui/button";
 import { format } from "date-fns";
 import toast, { Toaster } from "react-hot-toast";
 import { differenceInDays, startOfDay } from "date-fns";
 import * as XLSX from "xlsx";
+
+
+
+
+
+
+
+
+
+const limpiarAuditoria = async (equipo) => {
+  try {
+    if (!equipo?.id) return;
+    setAccionando(p => ({ ...p, [equipo.id]: true }));
+
+    let fotoBorrada = false;
+    try {
+      fotoBorrada = await borrarFotoAuditoriaSiExiste(equipo);
+    } catch (e) {
+      console.error("Borrando foto auditoría:", e);
+      toast.error("No se pudo borrar la foto (revisa reglas de Storage).");
+    }
+
+    await updateDoc(doc(db, "equipos", equipo.id), { auditoria: deleteField() });
+
+    setEquipos(prev => prev.map(e => e.id === equipo.id ? (() => {
+      const { auditoria, ...rest } = e; return rest;
+    })() : e));
+
+    toast.success(fotoBorrada
+      ? "🧹 Auditoría y foto eliminadas"
+      : "🧹 Auditoría eliminada (no se encontró foto)"
+    );
+  } catch (err) {
+    console.error(err);
+    toast.error("No se pudo eliminar la auditoría");
+  } finally {
+    setAccionando(p => { const n = { ...p }; delete n[equipo.id]; return n; });
+  }
+};
+
+
+
+// Confirmación visual antes de limpiar auditoría
+const confirmarLimpiarAuditoria = (equipo) => {
+  toast(
+    (t) => (
+      <div>
+        <p>
+          ¿Eliminar <strong>toda</strong> la información de auditoría y su foto
+          en Storage para este equipo?
+        </p>
+        <div className="mt-2 flex justify-end gap-2">
+          <button
+            onClick={() => {
+              toast.dismiss(t.id);
+              limpiarAuditoria(equipo); // 👈 llama a tu función que borra foto + campo
+            }}
+            className="rounded bg-red-600 px-3 py-1 text-white hover:bg-red-700"
+          >
+            Sí, eliminar
+          </button>
+          <button
+            onClick={() => toast.dismiss(t.id)}
+            className="rounded bg-gray-300 px-3 py-1 hover:bg-gray-400"
+          >
+            Cancelar
+          </button>
+        </div>
+      </div>
+    ),
+    { duration: 10000 }
+  );
+};
+
+
+
 
 /* --- UI Loading Overlay simple --- */
 function LoadingOverlay({ text = "Cargando equipos…" }) {
@@ -38,12 +120,83 @@ function LoadingOverlay({ text = "Cargando equipos…" }) {
 }
 
 export default function EquiposEditable() {
+  
+
+  
+
+
   const [equipos, setEquipos] = useState([]);
   const [cuadrillas, setCuadrillas] = useState([]);
   const [usuarios, setUsuarios] = useState([]);
   const [editing, setEditing] = useState({});
   const [editandoId, setEditandoId] = useState(null);
   const [accionando, setAccionando] = useState({});
+
+
+
+  // 🧹 LIMPIAR auditoría (borra foto + campo)
+  const limpiarAuditoria = async (equipo) => {
+    try {
+      if (!equipo?.id) return;
+      setAccionando((p) => ({ ...p, [equipo.id]: true }));
+
+      let fotoBorrada = false;
+      try {
+        fotoBorrada = await borrarFotoAuditoriaSiExiste(equipo);
+      } catch (e) {
+        console.error("Borrando foto auditoría:", e);
+        toast.error("No se pudo borrar la foto (revisa reglas de Storage).");
+      }
+
+      await updateDoc(doc(db, "equipos", equipo.id), { auditoria: deleteField() });
+
+      setEquipos((prev) =>
+        prev.map((e) =>
+          e.id === equipo.id
+            ? (() => { const { auditoria, ...rest } = e; return rest; })()
+            : e
+        )
+      );
+
+      toast.success(
+        fotoBorrada
+          ? "🧹 Auditoría y foto eliminadas"
+          : "🧹 Auditoría eliminada (no se encontró foto)"
+      );
+    } catch (err) {
+      console.error(err);
+      toast.error("No se pudo eliminar la auditoría");
+    } finally {
+      setAccionando((p) => {
+        const n = { ...p };
+        delete n[equipo.id];
+        return n;
+      });
+    }
+  };
+
+  // ✅ Confirmación antes de limpiar
+  const confirmarLimpiarAuditoria = (equipo) => {
+    toast((t) => (
+      <div>
+        <p>¿Eliminar <strong>toda</strong> la información de auditoría y su foto en Storage?</p>
+        <div className="mt-2 flex justify-end gap-2">
+          <button
+            onClick={() => { toast.dismiss(t.id); limpiarAuditoria(equipo); }}
+            className="rounded bg-red-600 px-3 py-1 text-white hover:bg-red-700"
+          >
+            Sí, eliminar
+          </button>
+          <button
+            onClick={() => toast.dismiss(t.id)}
+            className="rounded bg-gray-300 px-3 py-1 hover:bg-gray-400"
+          >
+            Cancelar
+          </button>
+        </div>
+      </div>
+    ), { duration: 10000 });
+  };
 
   const [filtro, setFiltro] = useState("");
   const [busqueda, setBusqueda] = useState("");
@@ -59,6 +212,51 @@ export default function EquiposEditable() {
   const { userData } = useAuth();
 
   const opcionesExtra = ["garantía", "avería", "robo", "pérdida"];
+
+
+  // Construye refs candidatas: fotoPath, fotoURL, y fallback por SN
+const buildAuditoriaRefs = (equipo) => {
+  const refs = [];
+
+  const path = equipo?.auditoria?.fotoPath;
+  if (typeof path === "string" && path.trim()) {
+    refs.push(ref(storage, path));
+  }
+
+  const url = equipo?.auditoria?.fotoURL;
+  if (typeof url === "string" && url.trim()) {
+    refs.push(ref(storage, url)); // admite https:// o gs://
+  }
+
+  const sn = equipo?.SN;
+  if (typeof sn === "string" && sn.trim()) {
+    refs.push(ref(storage, `auditoria/${sn}.jpg`));
+    refs.push(ref(storage, `auditoria/${sn}.png`));
+  }
+
+  // dedup por fullPath/toString
+  const m = new Map();
+  refs.forEach(r => m.set(r.fullPath || r.toString(), r));
+  return [...m.values()];
+};
+
+const borrarFotoAuditoriaSiExiste = async (equipo) => {
+  const refs = buildAuditoriaRefs(equipo);
+  for (const r of refs) {
+    try {
+      await deleteObject(r);
+      return true; // borró una, listo
+    } catch (err) {
+      if (err?.code === "storage/object-not-found" || err?.code === "storage/unauthorized") {
+        continue; // intenta con la siguiente
+      }
+      throw err; // otros errores sí se informan
+    }
+  }
+  return false;
+};
+
+  
 
   // Debounce de búsqueda para no filtrar en cada tecla
   useEffect(() => {
@@ -558,6 +756,18 @@ export default function EquiposEditable() {
       });
     }
   };
+
+
+
+  
+
+
+
+
+
+
+
+
 
   // 📤 Export general (como antes: usa base filtrada/única)
   const exportarEquipos = () => {
@@ -1111,34 +1321,46 @@ export default function EquiposEditable() {
                     </Button>
                   )}
                   <div className="flex flex-wrap items-center gap-2 mt-1">
-                    {e?.auditoria?.estado === "sustentada" ? (
-                      <Button
-                        size="sm"
-                        disabled
-                        className="rounded-lg bg-emerald-600 px-3 py-1 text-white"
-                      >
-                        Sustentada
-                      </Button>
-                    ) : e?.auditoria?.requiere === true ? (
-                      <Button
-                        size="sm"
-                        disabled={!!accionando[e.id]}
-                        className="rounded-lg bg-red-500 px-3 py-1 text-white hover:bg-red-600 disabled:opacity-60"
-                        onClick={() => quitarSustentacion(e)}
-                      >
-                        Quitar
-                      </Button>
-                    ) : (
-                      <Button
-                        size="sm"
-                        disabled={!!accionando[e.id] || !e?.SN}
-                        className="rounded-lg bg-amber-500 px-3 py-1 text-white hover:bg-amber-600 disabled:opacity-60"
-                        onClick={() => marcarSustentacion(e)}
-                      >
-                        Sustentar
-                      </Button>
-                    )}
-                  </div>
+  {e?.auditoria?.estado === "sustentada" ? (
+    <div className="flex items-center gap-2">
+      <Button
+        size="sm"
+        disabled
+        className="rounded-lg bg-emerald-600 px-3 py-1 text-white"
+      >
+        Sustentada
+      </Button>
+      {/* NUEVO: limpiar auditoría (borra foto en Storage + campo en Firestore) */}
+      <Button
+        size="sm"
+        disabled={!!accionando[e.id]}
+        className="rounded-lg bg-slate-600 px-3 py-1 text-white hover:bg-slate-700 disabled:opacity-60"
+        onClick={() => confirmarLimpiarAuditoria(e)}
+      >
+        🧹 Limpiar auditoría
+      </Button>
+    </div>
+  ) : e?.auditoria?.requiere === true ? (
+    <Button
+      size="sm"
+      disabled={!!accionando[e.id]}
+      className="rounded-lg bg-red-500 px-3 py-1 text-white hover:bg-red-600 disabled:opacity-60"
+      onClick={() => quitarSustentacion(e)}
+    >
+      Quitar
+    </Button>
+  ) : (
+    <Button
+      size="sm"
+      disabled={!!accionando[e.id] || !e?.SN}
+      className="rounded-lg bg-amber-500 px-3 py-1 text-white hover:bg-amber-600 disabled:opacity-60"
+      onClick={() => marcarSustentacion(e)}
+    >
+      Sustentar
+    </Button>
+  )}
+</div>
+
                 </td>
               </tr>
             ))}
