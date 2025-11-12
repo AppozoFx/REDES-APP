@@ -14,7 +14,7 @@ import {
   Package, PackageOpen, FileStack, UserRoundSearch, UserPlus, TrafficCone, CheckCircle,
   FileChartColumn, ChevronDown, Archive as IconoGrupoAlmacen, UsersRound as IconoGrupoAdministracion,
   DollarSign as IconoGrupoLiquidacion, Building as IconoGrupoInstalaciones, ListChecks as IconoGrupoAsistencia,
-  Wrench as IconoGrupoConfiguracion, UploadCloud, Home,
+  Wrench as IconoGrupoConfiguracion, UploadCloud, Home,FileCheck2,
   Boxes, ShieldCheck
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -243,6 +243,7 @@ export default function LayoutApp({ children }) {
       { href: "/almacen/equipos", label: "Inventario Equipos", icon: I(PackageSearch), roles: ["Almacén","TI"] },
       { href: "/almacen/devolucion", label: "Devolución Equipos", icon: I(PackageOpen), roles: ["Almacén","TI"] },
       { href: "/almacen/recepcion-actas", label: "Recepción Actas", icon: I(FileStack), roles: ["Almacén","TI"] },
+      { href: "/almacen/auditoria", label: "Auditoría", icon: I(FileCheck2), roles: ["Almacén","Gerencia","TI"] },
       { 
       href: "/almacen/abastecimiento-cuadrillas", 
       label: "Abastecimiento Cuadrillas", 
