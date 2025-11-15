@@ -84,6 +84,7 @@ export default function AuditoriaPage() {
   const [loading, setLoading] = useState(false);
   const [filtroUbicacion, setFiltroUbicacion] = useState("todas"); // ubicación general
   const [filtroEstadoGeneral, setFiltroEstadoGeneral] = useState("todos"); // estado general
+  const [excluirInstalados, setExcluirInstalados] = useState(true); // NUEVO: no contar instalados
 
   // Excel
   const [fileName, setFileName] = useState("");
@@ -110,13 +111,17 @@ export default function AuditoriaPage() {
     cargar();
   }, []);
 
-  // KPIs
+  // KPIs (respetan el toggle de excluir instalados)
   const kpis = useMemo(() => {
-    const total = equipos.length;
-    const pend = equipos.filter((e) => e?.auditoria?.estado === "pendiente").length;
-    const sust = equipos.filter((e) => e?.auditoria?.estado === "sustentada").length;
+    const base = excluirInstalados
+      ? equipos.filter((e) => (e?.estado ?? "").toString().toUpperCase() !== "INSTALADO")
+      : equipos;
+
+    const total = base.length;
+    const pend = base.filter((e) => e?.auditoria?.estado === "pendiente").length;
+    const sust = base.filter((e) => e?.auditoria?.estado === "sustentada").length;
     return { total, pend, sust };
-  }, [equipos]);
+  }, [equipos, excluirInstalados]);
 
   // Listas únicas para selects
   const ubicacionesDisponibles = useMemo(
@@ -129,10 +134,17 @@ export default function AuditoriaPage() {
     [equipos]
   );
 
-  // Filtrado
+  // Filtrado principal (incluye “no contar instalados”)
   const equiposFiltrados = useMemo(() => {
     const q = busqueda.trim().toLowerCase();
     return equipos.filter((e) => {
+      if (
+        excluirInstalados &&
+        (e?.estado ?? "").toString().toUpperCase() === "INSTALADO"
+      ) {
+        return false;
+      }
+
       const okEstadoAud = filtroEstadoAud === "todos" ? true : e?.auditoria?.estado === filtroEstadoAud;
       const okUbic = filtroUbicacion === "todas" ? true : (e?.ubicacion ?? "") === filtroUbicacion;
       const okEstadoGen = filtroEstadoGeneral === "todos" ? true : (e?.estado ?? "") === filtroEstadoGeneral;
@@ -143,7 +155,7 @@ export default function AuditoriaPage() {
         (e?.ubicacion ?? "").toLowerCase().includes(q);
       return okEstadoAud && okUbic && okEstadoGen && okQ;
     });
-  }, [equipos, filtroEstadoAud, filtroUbicacion, filtroEstadoGeneral, busqueda]);
+  }, [equipos, filtroEstadoAud, filtroUbicacion, filtroEstadoGeneral, busqueda, excluirInstalados]);
 
   /* ========== Acciones por fila ========== */
 
@@ -299,7 +311,25 @@ export default function AuditoriaPage() {
     }
   };
 
-  /* ========== Export manifest (Excel con FotoURL) ========== */
+  /* ========== Plantilla Excel (SN) ========== */
+  const descargarPlantillaSN = () => {
+    try {
+      const rows = [
+        { SN: "EjemploSN001234567" },
+        { SN: "EjemploSN001234568" },
+      ];
+      const ws = XLSX.utils.json_to_sheet(rows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "PLANTILLA_SN");
+      XLSX.writeFile(wb, "PLANTILLA-AUDITORIA-SN.xlsx");
+      toast.success("Plantilla descargada");
+    } catch (e) {
+      console.error(e);
+      toast.error("No se pudo generar la plantilla");
+    }
+  };
+
+  /* ========== Export manifest (Excel con FotoURL como link) ========== */
   const exportManifest = () => {
     const base = equiposFiltrados.map((e) => ({
       SN: e.SN,
@@ -310,14 +340,36 @@ export default function AuditoriaPage() {
       Auditoría: e?.auditoria?.estado || "pendiente",
       FotoURL: e?.auditoria?.fotoURL || "",
     }));
+
     if (base.length === 0) {
       toast.error("No hay filas para exportar");
       return;
     }
+
     const ws = XLSX.utils.json_to_sheet(base);
+
+    // Convertir FotoURL en hipervínculo
+    const range = XLSX.utils.decode_range(ws["!ref"]);
+    const FOTO_COL_INDEX = 6; // 0:SN,1:F.Des,2:Tec,3:Ubic,4:Estado,5:Auditoría,6:FotoURL
+
+    for (let R = range.s.row + 1; R <= range.e.row; ++R) {
+      const cellAddress = XLSX.utils.encode_cell({ r: R, c: FOTO_COL_INDEX });
+      const cell = ws[cellAddress];
+      if (cell && cell.v) {
+        ws[cellAddress].l = {
+          Target: cell.v,
+          Tooltip: "Ver foto",
+        };
+      }
+    }
+
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "AUDITORIA");
-    XLSX.writeFile(wb, `AUDITORIA-MANIFEST-${new Date().toISOString().slice(0, 10)}.xlsx`);
+
+    XLSX.writeFile(
+      wb,
+      `AUDITORIA-MANIFEST-${new Date().toISOString().slice(0, 10)}.xlsx`
+    );
     toast.success("Exportado");
   };
 
@@ -360,7 +412,9 @@ export default function AuditoriaPage() {
       }
 
       await cargar();
-      toast.success(`Nueva auditoría lista. Limpiados: ${limpiados}. Fotos borradas: ${fotosBorradas}.`);
+      toast.success(
+        `Nueva auditoría lista. Limpiados: ${limpiados}. Fotos borradas: ${fotosBorradas}.`
+      );
     } catch (e) {
       console.error(e);
       toast.error("Error al limpiar auditoría");
@@ -372,149 +426,255 @@ export default function AuditoriaPage() {
   /* ==================== UI ==================== */
 
   return (
-    <div className="p-6">
+    <div className="p-6 space-y-4 bg-slate-50 min-h-screen">
       <Toaster position="top-right" />
-      <h2 className="mb-4 text-2xl font-semibold">📋 Auditoría de Equipos</h2>
 
-      {/* KPIs */}
-      <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <div className="rounded-lg border p-3">
-          <div className="text-sm text-gray-500">En auditoría</div>
-          <div className="text-2xl font-semibold">{kpis.total}</div>
+      {/* Header */}
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h2 className="text-2xl font-semibold text-slate-900">
+            📋 Auditoría de Equipos
+          </h2>
+          <p className="text-sm text-slate-500">
+            Gestiona los equipos observados, sustenta con fotos y controla el avance
+            de la auditoría de manera centralizada.
+          </p>
         </div>
-        <div className="rounded-lg border p-3">
-          <div className="text-sm text-gray-500">Pendientes</div>
-          <div className="text-2xl font-semibold">{kpis.pend}</div>
-        </div>
-        <div className="rounded-lg border p-3">
-          <div className="text-sm text-gray-500">Sustentadas</div>
-          <div className="text-2xl font-semibold">{kpis.sust}</div>
+
+        <div className="flex flex-wrap gap-2">
+          <Button
+            variant="outline"
+            type="button"
+            className="border-slate-300 text-slate-700 hover:bg-slate-100"
+            onClick={cargar}
+            disabled={loading || procesando}
+          >
+            🔄 Actualizar
+          </Button>
+
+          <Button
+            type="button"
+            onClick={nuevaAuditoria}
+            disabled={procesando}
+            className="bg-slate-800 hover:bg-slate-900 text-white"
+          >
+            🧹 Nueva auditoría
+          </Button>
         </div>
       </div>
 
-      {/* Filtros y acciones */}
-      <div className="mb-4 flex flex-wrap items-center gap-3">
-        {/* Estado de la auditoría */}
-        <select
-          className="rounded border px-3 py-2"
-          value={filtroEstadoAud}
-          onChange={(e) => setFiltroEstadoAud(e.target.value)}
-        >
-          <option value="todos">Todos</option>
-          <option value="pendiente">Pendiente</option>
-          <option value="sustentada">Sustentada</option>
-        </select>
-
-        {/* Estado general */}
-        <select
-          className="rounded border px-3 py-2"
-          value={filtroEstadoGeneral}
-          onChange={(e) => setFiltroEstadoGeneral(e.target.value)}
-        >
-          <option value="todos">Estado (general)</option>
-          {estadosGenerales.map((s) => (
-            <option key={s} value={s}>
-              {s}
-            </option>
-          ))}
-        </select>
-
-        {/* Ubicación */}
-        <select
-          className="rounded border px-3 py-2"
-          value={filtroUbicacion}
-          onChange={(e) => setFiltroUbicacion(e.target.value)}
-        >
-          <option value="todas">Ubicación</option>
-          {ubicacionesDisponibles.map((u) => (
-            <option key={u} value={u}>
-              {u}
-            </option>
-          ))}
-        </select>
-
-        {/* Búsqueda */}
-        <Input
-          className="w-full max-w-xs"
-          placeholder="🔍 Buscar por SN / equipo / ubicación"
-          value={busqueda}
-          onChange={(e) => setBusqueda(e.target.value)}
-        />
-
-        {/* Acciones */}
-        <Button onClick={exportManifest} className="rounded-lg bg-blue-600 px-4 py-2 text-white hover:bg-blue-700">
-          📤 Exportar Excel (URLs)
-        </Button>
-
-        <label className="cursor-pointer rounded-lg bg-emerald-600 px-4 py-2 text-white hover:bg-emerald-700">
-          📥 Cargar Excel (SN)
-          <input
-            type="file"
-            accept=".xlsx,.xls,.csv"
-            className="hidden"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) onFile(f);
-            }}
-          />
-        </label>
-
-        <Button
-          disabled={snExcel.length === 0 || procesando}
-          onClick={marcarMasivo}
-          className="rounded-lg bg-purple-600 px-4 py-2 text-white hover:bg-purple-700 disabled:opacity-50"
-        >
-          ⚡ Marcar {snExcel.length || ""} SN
-        </Button>
-
-        <Button
-          disabled={procesando}
-          onClick={nuevaAuditoria}
-          className="rounded-lg bg-slate-700 px-4 py-2 text-white hover:bg-slate-800 disabled:opacity-50"
-        >
-          🧹 Nueva auditoría (limpiar + borrar fotos)
-        </Button>
-
-        {fileName && (
-          <span className="text-sm text-gray-600">
-            Archivo: {fileName} ({snExcel.length} SN)
-          </span>
-        )}
+      {/* KPIs + toggle instalados */}
+      <div className="grid gap-3 sm:grid-cols-4">
+        <div className="rounded-xl border bg-white p-3 shadow-sm">
+          <div className="text-xs font-medium text-slate-500">
+            En auditoría (según filtros)
+          </div>
+          <div className="mt-1 text-2xl font-semibold text-slate-900">
+            {kpis.total}
+          </div>
+        </div>
+        <div className="rounded-xl border bg-white p-3 shadow-sm">
+          <div className="text-xs font-medium text-amber-600">
+            Pendientes
+          </div>
+          <div className="mt-1 text-2xl font-semibold text-amber-700">
+            {kpis.pend}
+          </div>
+        </div>
+        <div className="rounded-xl border bg-white p-3 shadow-sm">
+          <div className="text-xs font-medium text-emerald-600">
+            Sustentadas
+          </div>
+          <div className="mt-1 text-2xl font-semibold text-emerald-700">
+            {kpis.sust}
+          </div>
+        </div>
+        <div className="rounded-xl border bg-white p-3 shadow-sm flex items-center">
+          <label className="flex items-center gap-2 text-xs sm:text-sm text-slate-700">
+            <input
+              type="checkbox"
+              className="h-4 w-4 rounded border-slate-300 text-emerald-600"
+              checked={excluirInstalados}
+              onChange={(e) => setExcluirInstalados(e.target.checked)}
+            />
+            <span>
+              No contar equipos <span className="font-semibold">instalados</span> en
+              auditoría
+            </span>
+          </label>
+        </div>
       </div>
 
+      {/* Filtros & acciones */}
+      <div className="rounded-xl border bg-white p-4 shadow-sm space-y-3">
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Estado de la auditoría */}
+          <div className="flex flex-col text-xs">
+            <span className="text-slate-500 mb-1">Estado auditoría</span>
+            <select
+              className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm"
+              value={filtroEstadoAud}
+              onChange={(e) => setFiltroEstadoAud(e.target.value)}
+            >
+              <option value="todos">Todos</option>
+              <option value="pendiente">Pendiente</option>
+              <option value="sustentada">Sustentada</option>
+            </select>
+          </div>
+
+          {/* Estado general */}
+          <div className="flex flex-col text-xs">
+            <span className="text-slate-500 mb-1">Estado general</span>
+            <select
+              className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm"
+              value={filtroEstadoGeneral}
+              onChange={(e) => setFiltroEstadoGeneral(e.target.value)}
+            >
+              <option value="todos">Todos</option>
+              {estadosGenerales.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Ubicación */}
+          <div className="flex flex-col text-xs">
+            <span className="text-slate-500 mb-1">Ubicación</span>
+            <select
+              className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm"
+              value={filtroUbicacion}
+              onChange={(e) => setFiltroUbicacion(e.target.value)}
+            >
+              <option value="todas">Todas</option>
+              {ubicacionesDisponibles.map((u) => (
+                <option key={u} value={u}>
+                  {u}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Búsqueda */}
+          <div className="flex-1 min-w-[220px]">
+            <span className="mb-1 block text-xs text-slate-500">
+              Buscar
+            </span>
+            <Input
+              className="w-full"
+              placeholder="🔍 SN, equipo o ubicación"
+              value={busqueda}
+              onChange={(e) => setBusqueda(e.target.value)}
+            />
+          </div>
+        </div>
+
+        {/* Zona Excel / acciones masivas */}
+        <div className="mt-2 flex flex-wrap items-center gap-2 justify-between border-t pt-3">
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              onClick={exportManifest}
+              className="bg-blue-600 hover:bg-blue-700 text-white"
+            >
+              📤 Exportar Excel (con links)
+            </Button>
+
+            <Button
+              type="button"
+              variant="outline"
+              className="border-emerald-500 text-emerald-700 hover:bg-emerald-50"
+              onClick={descargarPlantillaSN}
+            >
+              📄 Descargar plantilla SN
+            </Button>
+
+            <label className="cursor-pointer rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 flex items-center gap-1">
+              📥 Cargar Excel (SN)
+              <input
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) onFile(f);
+                }}
+              />
+            </label>
+
+            <Button
+              type="button"
+              disabled={snExcel.length === 0 || procesando}
+              onClick={marcarMasivo}
+              className="bg-purple-600 hover:bg-purple-700 text-white disabled:opacity-60"
+            >
+              ⚡ Marcar {snExcel.length || ""} SN
+            </Button>
+          </div>
+
+          {/* Resumen archivo cargado */}
+          {fileName && (
+            <div className="text-xs text-slate-500 max-w-xs text-right">
+              <div className="font-medium text-slate-700 truncate">
+                Archivo: {fileName}
+              </div>
+              <div>
+                {snExcel.length} SN encontrados para marcar masivo
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Tabla */}
       {loading ? (
-        <div className="rounded border p-6 text-center text-gray-600">Cargando…</div>
+        <div className="rounded-xl border bg-white p-6 text-center text-slate-600 shadow-sm">
+          Cargando auditoría…
+        </div>
       ) : (
-        <div className="max-h-[75vh] overflow-auto rounded border">
+        <div className="rounded-xl border bg-white shadow-sm max-h-[75vh] overflow-auto">
           <table className="min-w-[1200px] text-sm">
-            <thead className="sticky top-0 bg-gray-100">
-              <tr>
+            <thead className="sticky top-0 z-10 bg-slate-100">
+              <tr className="text-left text-xs font-medium text-slate-600">
                 <th className="p-2">SN</th>
+                <th className="p-2">Equipo</th>
                 <th className="p-2">F. Despacho</th>
                 <th className="p-2">Técnicos</th>
                 <th className="p-2">Estado</th>
                 <th className="p-2">Ubicación</th>
                 <th className="p-2">Auditoría</th>
                 <th className="p-2">Foto</th>
-                <th className="p-2">Acción</th>
+                <th className="p-2 text-right">Acciones</th>
               </tr>
             </thead>
             <tbody>
               {equiposFiltrados.map((e) => (
-                <tr key={e.id} className="border-t">
-                  <td className="p-2 font-mono">{e.SN}</td>
-                  <td className="p-2">{parseFecha(e.f_despacho)}</td>
-                  <td className="p-2">
+                <tr key={e.id} className="border-t hover:bg-slate-50/60">
+                  <td className="p-2 font-mono text-xs text-slate-800">
+                    {e.SN}
+                  </td>
+                  <td className="p-2 text-slate-800">
+                    {e.equipo || "-"}
+                  </td>
+                  <td className="p-2 text-slate-700">
+                    {parseFecha(e.f_despacho) || "-"}
+                  </td>
+                  <td className="p-2 text-slate-700">
                     {Array.isArray(e.tecnicos) ? e.tecnicos.join(", ") : e.tecnicos || "-"}
                   </td>
-                  <td className="p-2">{e.estado || "-"}</td>
-                  <td className="p-2">{e.ubicacion || "-"}</td>
+                  <td className="p-2 text-slate-700">
+                    {e.estado || "-"}
+                  </td>
+                  <td className="p-2 text-slate-700">
+                    {e.ubicacion || "-"}
+                  </td>
                   <td className="p-2">
                     <span
-                      className={`rounded px-2 py-1 text-xs ${
+                      className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
                         e?.auditoria?.estado === "sustentada"
-                          ? "bg-emerald-100 text-emerald-700"
-                          : "bg-amber-100 text-amber-700"
+                          ? "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100"
+                          : "bg-amber-50 text-amber-700 ring-1 ring-amber-100"
                       }`}
                     >
                       {e?.auditoria?.estado || "pendiente"}
@@ -526,25 +686,26 @@ export default function AuditoriaPage() {
                         href={e.auditoria.fotoURL}
                         target="_blank"
                         rel="noreferrer"
-                        className="text-blue-600 underline"
+                        className="text-blue-600 underline text-xs"
                       >
                         Ver foto
                       </a>
                     ) : (
-                      "-"
+                      <span className="text-xs text-slate-400">Sin foto</span>
                     )}
                   </td>
-                  <td className="p-2">
+                  <td className="p-2 text-right">
                     {e?.auditoria ? (
                       <Button
                         size="sm"
-                        className="rounded bg-slate-600 px-3 py-1 text-white hover:bg-slate-700"
+                        type="button"
+                        className="bg-slate-700 hover:bg-slate-800 text-white px-3 py-1 h-7 text-xs"
                         onClick={() => limpiarAuditoriaUno(e)}
                       >
                         🧹 Limpiar
                       </Button>
                     ) : (
-                      "-"
+                      <span className="text-xs text-slate-400">-</span>
                     )}
                   </td>
                 </tr>
@@ -552,7 +713,10 @@ export default function AuditoriaPage() {
 
               {equiposFiltrados.length === 0 && (
                 <tr>
-                  <td className="p-4 text-center text-gray-500" colSpan={8}>
+                  <td
+                    className="p-6 text-center text-slate-500 text-sm"
+                    colSpan={9}
+                  >
                     No hay equipos para mostrar con el filtro actual.
                   </td>
                 </tr>
