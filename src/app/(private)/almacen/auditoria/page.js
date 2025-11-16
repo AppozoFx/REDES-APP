@@ -15,7 +15,7 @@ import {
   deleteField,
   updateDoc,
 } from "firebase/firestore";
-import { ref, deleteObject } from "firebase/storage";
+import { ref, deleteObject, uploadBytes, getDownloadURL } from "firebase/storage";
 import { db, storage } from "@/firebaseConfig";
 
 import { Input } from "@/app/components/ui/input";
@@ -39,6 +39,13 @@ const parseFecha = (val) => {
   if (val?.toDate) return format(val.toDate(), "d/M/yyyy");
   const d = new Date(val);
   return isNaN(d.getTime()) ? "" : format(d, "d/M/yyyy");
+};
+
+const parseFechaHora = (val) => {
+  if (!val) return "";
+  if (val?.toDate) return format(val.toDate(), "d/M/yyyy HH:mm");
+  const d = new Date(val);
+  return isNaN(d.getTime()) ? "" : format(d, "d/M/yyyy HH:mm");
 };
 
 // Construye refs candidatas para borrar la foto de Storage
@@ -66,7 +73,11 @@ const borrarFotoAuditoriaSiExiste = async (equipo) => {
       await deleteObject(r);
       return true;
     } catch (err) {
-      if (err?.code === "storage/object-not-found" || err?.code === "storage/unauthorized") continue;
+      if (
+        err?.code === "storage/object-not-found" ||
+        err?.code === "storage/unauthorized"
+      )
+        continue;
       throw err;
     }
   }
@@ -84,21 +95,48 @@ export default function AuditoriaPage() {
   const [loading, setLoading] = useState(false);
   const [filtroUbicacion, setFiltroUbicacion] = useState("todas"); // ubicación general
   const [filtroEstadoGeneral, setFiltroEstadoGeneral] = useState("todos"); // estado general
-  const [excluirInstalados, setExcluirInstalados] = useState(true); // NUEVO: no contar instalados
+  const [excluirInstalados, setExcluirInstalados] = useState(true); // no contar instalados
 
   // Excel
   const [fileName, setFileName] = useState("");
   const [snExcel, setSnExcel] = useState([]); // preview SN
   const [procesando, setProcesando] = useState(false);
 
+  // Controlamos subida de foto por fila
+  const [subiendoId, setSubiendoId] = useState(null);
+
+  // Modal para ver foto
+  const [fotoModal, setFotoModal] = useState({
+    open: false,
+    url: "",
+    sn: "",
+  });
+
+  // Observaciones editadas (por id de equipo)
+  const [obsDraft, setObsDraft] = useState({});
+
   // Cargar equipos con auditoría activa
   const cargar = async () => {
     setLoading(true);
     try {
-      const qRef = query(collection(db, "equipos"), where("auditoria.requiere", "==", true));
+      const qRef = query(
+        collection(db, "equipos"),
+        where("auditoria.requiere", "==", true)
+      );
       const snap = await getDocs(qRef);
       const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
       setEquipos(rows);
+
+      // Inicializar/mezclar observaciones sin perder lo ya escrito
+      setObsDraft((prev) => {
+        const next = { ...prev };
+        rows.forEach((e) => {
+          if (next[e.id] === undefined) {
+            next[e.id] = e.observacion || "";
+          }
+        });
+        return next;
+      });
     } catch (e) {
       console.error(e);
       toast.error("No se pudo cargar auditorías");
@@ -109,32 +147,51 @@ export default function AuditoriaPage() {
 
   useEffect(() => {
     cargar();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // KPIs (respetan el toggle de excluir instalados)
-  const kpis = useMemo(() => {
-    const base = excluirInstalados
-      ? equipos.filter((e) => (e?.estado ?? "").toString().toUpperCase() !== "INSTALADO")
-      : equipos;
+  /* ========== Métricas y listas para filtros ========== */
 
+  // Base común para listas (respetando excluirInstalados y estadoAuditoria)
+  const baseParaListas = useMemo(() => {
+    let list = [...equipos];
+
+    if (excluirInstalados) {
+      list = list.filter(
+        (e) => (e?.estado ?? "").toString().toUpperCase() !== "INSTALADO"
+      );
+    }
+
+    if (filtroEstadoAud !== "todos") {
+      list = list.filter((e) => e?.auditoria?.estado === filtroEstadoAud);
+    }
+
+    return list;
+  }, [equipos, excluirInstalados, filtroEstadoAud]);
+
+  // KPIs
+  const kpis = useMemo(() => {
+    const base = baseParaListas;
     const total = base.length;
     const pend = base.filter((e) => e?.auditoria?.estado === "pendiente").length;
     const sust = base.filter((e) => e?.auditoria?.estado === "sustentada").length;
     return { total, pend, sust };
-  }, [equipos, excluirInstalados]);
+  }, [baseParaListas]);
 
   // Listas únicas para selects
   const ubicacionesDisponibles = useMemo(
-    () => [...new Set(equipos.map((e) => e?.ubicacion).filter(Boolean))].sort(),
-    [equipos]
+    () =>
+      [...new Set(baseParaListas.map((e) => e?.ubicacion).filter(Boolean))].sort(),
+    [baseParaListas]
   );
 
   const estadosGenerales = useMemo(
-    () => [...new Set(equipos.map((e) => e?.estado).filter(Boolean))].sort(),
-    [equipos]
+    () =>
+      [...new Set(baseParaListas.map((e) => e?.estado).filter(Boolean))].sort(),
+    [baseParaListas]
   );
 
-  // Filtrado principal (incluye “no contar instalados”)
+  // Filtrado principal
   const equiposFiltrados = useMemo(() => {
     const q = busqueda.trim().toLowerCase();
     return equipos.filter((e) => {
@@ -145,17 +202,34 @@ export default function AuditoriaPage() {
         return false;
       }
 
-      const okEstadoAud = filtroEstadoAud === "todos" ? true : e?.auditoria?.estado === filtroEstadoAud;
-      const okUbic = filtroUbicacion === "todas" ? true : (e?.ubicacion ?? "") === filtroUbicacion;
-      const okEstadoGen = filtroEstadoGeneral === "todos" ? true : (e?.estado ?? "") === filtroEstadoGeneral;
+      const okEstadoAud =
+        filtroEstadoAud === "todos"
+          ? true
+          : e?.auditoria?.estado === filtroEstadoAud;
+      const okUbic =
+        filtroUbicacion === "todas"
+          ? true
+          : (e?.ubicacion ?? "") === filtroUbicacion;
+      const okEstadoGen =
+        filtroEstadoGeneral === "todos"
+          ? true
+          : (e?.estado ?? "") === filtroEstadoGeneral;
       const okQ =
         !q ||
         (e?.SN ?? "").toLowerCase().includes(q) ||
         (e?.equipo ?? "").toLowerCase().includes(q) ||
         (e?.ubicacion ?? "").toLowerCase().includes(q);
+
       return okEstadoAud && okUbic && okEstadoGen && okQ;
     });
-  }, [equipos, filtroEstadoAud, filtroUbicacion, filtroEstadoGeneral, busqueda, excluirInstalados]);
+  }, [
+    equipos,
+    filtroEstadoAud,
+    filtroUbicacion,
+    filtroEstadoGeneral,
+    busqueda,
+    excluirInstalados,
+  ]);
 
   /* ========== Acciones por fila ========== */
 
@@ -183,7 +257,79 @@ export default function AuditoriaPage() {
     }
   };
 
+  // Subir foto (con opción de marcar sustentado o solo actualizarla)
+  const subirFotoAuditoria = async (equipo, file, { marcarSustentado }) => {
+    if (!equipo?.id || !file) return;
+
+    const sn = toSN(equipo.SN);
+    if (!sn) {
+      toast.error("El equipo no tiene SN válido");
+      return;
+    }
+
+    setSubiendoId(equipo.id);
+    try {
+      // Borrar foto anterior, si hubiera
+      try {
+        await borrarFotoAuditoriaSiExiste(equipo);
+      } catch (_) {}
+
+      // Elegir extensión simple
+      let ext = "jpg";
+      if (
+        file.type === "image/png" ||
+        file.name?.toLowerCase().endsWith(".png")
+      ) {
+        ext = "png";
+      }
+
+      const path = `auditoria/${sn}.${ext}`;
+      const storageRef = ref(storage, path);
+
+      // Subir a Storage
+      await uploadBytes(storageRef, file);
+
+      // Obtener URL
+      const url = await getDownloadURL(storageRef);
+
+      // Construir objeto auditoria (respetando lo que ya hay)
+      const auditoriaBase = equipo.auditoria || {};
+      const auditoriaUpdate = {
+        ...auditoriaBase,
+        fotoPath: path,
+        fotoURL: url,
+        actualizadoEn: serverTimestamp(),
+      };
+
+      if (marcarSustentado) {
+        auditoriaUpdate.estado = "sustentada";
+        auditoriaUpdate.requiere = true;
+      }
+
+      await updateDoc(doc(db, "equipos", equipo.id), {
+        auditoria: auditoriaUpdate,
+      });
+
+      // Actualizamos en estado local
+      setEquipos((prev) =>
+        prev.map((x) => (x.id === equipo.id ? { ...x, auditoria: auditoriaUpdate } : x))
+      );
+
+      toast.success(
+        marcarSustentado
+          ? `SN ${sn} sustentado correctamente`
+          : `Foto de auditoría actualizada para SN ${sn}`
+      );
+    } catch (e) {
+      console.error(e);
+      toast.error("No se pudo subir la foto de auditoría");
+    } finally {
+      setSubiendoId(null);
+    }
+  };
+
   /* ========== Subir Excel: leer SN ========== */
+
   const onFile = async (file) => {
     try {
       const data = await file.arrayBuffer();
@@ -210,6 +356,7 @@ export default function AuditoriaPage() {
   };
 
   /* ========== Resolver SN → docId ========== */
+
   const resolverSNs = async (sns) => {
     const mapa = new Map(); // SN -> { id, data }
     const noEncontrados = new Set(sns);
@@ -230,6 +377,7 @@ export default function AuditoriaPage() {
   };
 
   /* ========== Marcar masivo (como “Sustentar”) ========== */
+
   const marcarMasivo = async () => {
     if (snExcel.length === 0) {
       toast.error("Primero sube un Excel con SN");
@@ -275,8 +423,12 @@ export default function AuditoriaPage() {
           const notifDoc = doc(collection(db, "notificaciones"));
           batchNotif.set(notifDoc, {
             tipo: "Auditoría - Marcar SN",
-            mensaje: `🔎 ${userData?.nombres ?? ""} ${userData?.apellidos ?? ""} marcó el SN ${sn} para auditoría.`,
-            usuario: `${userData?.nombres ?? ""} ${userData?.apellidos ?? ""}`.trim(),
+            mensaje: `🔎 ${userData?.nombres ?? ""} ${
+              userData?.apellidos ?? ""
+            } marcó el SN ${sn} para auditoría.`,
+            usuario: `${userData?.nombres ?? ""} ${
+              userData?.apellidos ?? ""
+            }`.trim(),
             fecha: serverTimestamp(),
             visto: false,
             detalles: {
@@ -300,7 +452,9 @@ export default function AuditoriaPage() {
       }
 
       await cargar();
-      toast.success(`Marcado masivo completado. OK: ${ok} • No encontrados: ${noEncontrados.length}`);
+      toast.success(
+        `Marcado masivo completado. OK: ${ok} • No encontrados: ${noEncontrados.length}`
+      );
       setSnExcel([]);
       setFileName("");
     } catch (e) {
@@ -312,12 +466,10 @@ export default function AuditoriaPage() {
   };
 
   /* ========== Plantilla Excel (SN) ========== */
+
   const descargarPlantillaSN = () => {
     try {
-      const rows = [
-        { SN: "EjemploSN001234567" },
-        { SN: "EjemploSN001234568" },
-      ];
+      const rows = [{ SN: "EjemploSN001234567" }, { SN: "EjemploSN001234568" }];
       const ws = XLSX.utils.json_to_sheet(rows);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "PLANTILLA_SN");
@@ -329,43 +481,64 @@ export default function AuditoriaPage() {
     }
   };
 
-  /* ========== Export manifest (Excel con FotoURL como link) ========== */
-  const exportManifest = () => {
-    const base = equiposFiltrados.map((e) => ({
-      SN: e.SN,
-      "F. Despacho": parseFecha(e.f_despacho),
-      Técnicos: Array.isArray(e.tecnicos) ? e.tecnicos.join(", ") : e.tecnicos || "",
-      Ubicación: e.ubicacion || "",
-      Estado: e.estado || "",
-      Auditoría: e?.auditoria?.estado || "pendiente",
-      FotoURL: e?.auditoria?.fotoURL || "",
-    }));
+  /* ========== Export manifest (Excel con links) ========== */
 
-    if (base.length === 0) {
+  const exportManifest = () => {
+    // Orden de columnas:
+    // SN | Equipo | F. Despacho | Técnicos | Ubicación | Estado | Auditoría | Observacion | FotoURL
+    const rows = equiposFiltrados.map((e) => [
+      e.SN,
+      e.equipo || "",
+      parseFecha(e.f_despacho),
+      Array.isArray(e.tecnicos) ? e.tecnicos.join(", ") : e.tecnicos || "",
+      e.ubicacion || "",
+      e.estado || "",
+      e?.auditoria?.estado || "pendiente",
+      e?.observacion || "",
+      e?.auditoria?.fotoURL || "",
+    ]);
+
+    if (rows.length === 0) {
       toast.error("No hay filas para exportar");
       return;
     }
 
-    const ws = XLSX.utils.json_to_sheet(base);
+    const header = [
+      "SN",
+      "Equipo",
+      "F. Despacho",
+      "Técnicos",
+      "Ubicación",
+      "Estado",
+      "Auditoría",
+      "Observacion",
+      "FotoURL",
+    ];
 
-    // Convertir FotoURL en hipervínculo
-    const range = XLSX.utils.decode_range(ws["!ref"]);
-    const FOTO_COL_INDEX = 6; // 0:SN,1:F.Des,2:Tec,3:Ubic,4:Estado,5:Auditoría,6:FotoURL
+    const ws = XLSX.utils.aoa_to_sheet([header, ...rows]);
+    const wb = XLSX.utils.book_new();
 
-    for (let R = range.s.row + 1; R <= range.e.row; ++R) {
-      const cellAddress = XLSX.utils.encode_cell({ r: R, c: FOTO_COL_INDEX });
-      const cell = ws[cellAddress];
-      if (cell && cell.v) {
-        ws[cellAddress].l = {
-          Target: cell.v,
-          Tooltip: "Ver foto",
-        };
+    // Convertir la columna FotoURL en fórmula HYPERLINK
+    const ref = ws["!ref"];
+    if (ref) {
+      const range = XLSX.utils.decode_range(ref);
+      const FOTO_COL_INDEX = 8; // 0..8 → FotoURL
+
+      for (let R = 1; R <= range.e.row; ++R) {
+        const addr = XLSX.utils.encode_cell({ r: R, c: FOTO_COL_INDEX });
+        const cell = ws[addr];
+        if (cell && typeof cell.v === "string" && cell.v.startsWith("http")) {
+          const url = cell.v;
+          ws[addr] = {
+            t: "s",
+            v: "Ver foto",
+            f: `HYPERLINK("${url}","Ver foto")`,
+          };
+        }
       }
     }
 
-    const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "AUDITORIA");
-
     XLSX.writeFile(
       wb,
       `AUDITORIA-MANIFEST-${new Date().toISOString().slice(0, 10)}.xlsx`
@@ -373,7 +546,50 @@ export default function AuditoriaPage() {
     toast.success("Exportado");
   };
 
+  /* ========== Guardar observaciones en lote ========== */
+
+  const guardarObservaciones = async () => {
+    try {
+      setProcesando(true);
+
+      const batch = writeBatch(db);
+      let cambios = 0;
+
+      equipos.forEach((e) => {
+        const nuevo = obsDraft[e.id] ?? "";
+        const actual = e.observacion ?? "";
+        if (nuevo !== actual) {
+          batch.update(doc(db, "equipos", e.id), { observacion: nuevo });
+          cambios++;
+        }
+      });
+
+      if (cambios === 0) {
+        toast("No hay cambios por guardar");
+        return;
+      }
+
+      await batch.commit();
+
+      // Reflejar en estado local
+      setEquipos((prev) =>
+        prev.map((e) => ({
+          ...e,
+          observacion: obsDraft[e.id] ?? e.observacion ?? "",
+        }))
+      );
+
+      toast.success(`Observaciones guardadas (${cambios} cambios)`);
+    } catch (e) {
+      console.error(e);
+      toast.error("No se pudieron guardar las observaciones");
+    } finally {
+      setProcesando(false);
+    }
+  };
+
   /* ========== Nueva auditoría (limpieza masiva + borrar fotos) ========== */
+
   const nuevaAuditoria = async () => {
     if (equipos.length === 0) {
       toast("No hay equipos en auditoría para limpiar");
@@ -430,38 +646,54 @@ export default function AuditoriaPage() {
       <Toaster position="top-right" />
 
       {/* Header */}
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h2 className="text-2xl font-semibold text-slate-900">
-            📋 Auditoría de Equipos
-          </h2>
-          <p className="text-sm text-slate-500">
-            Gestiona los equipos observados, sustenta con fotos y controla el avance
-            de la auditoría de manera centralizada.
-          </p>
-        </div>
+<div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+  <div>
+    <h2 className="text-2xl font-semibold text-slate-900">
+      📋 Auditoría de Equipos
+    </h2>
+    <p className="text-sm text-slate-500">
+      Gestiona los equipos observados, sustenta con fotos y controla el avance
+      de la auditoría de manera centralizada.
+    </p>
+  </div>
 
-        <div className="flex flex-wrap gap-2">
-          <Button
-            variant="outline"
-            type="button"
-            className="border-slate-300 text-slate-700 hover:bg-slate-100"
-            onClick={cargar}
-            disabled={loading || procesando}
-          >
-            🔄 Actualizar
-          </Button>
+  <div className="flex flex-wrap gap-2">
+    {/* Actualizar */}
+    <Button
+      type="button"
+      variant="outline"
+      className="flex items-center gap-2 rounded-full border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-60"
+      onClick={cargar}
+      disabled={loading || procesando}
+    >
+      <span>🔄</span>
+      <span>Actualizar</span>
+    </Button>
 
-          <Button
-            type="button"
-            onClick={nuevaAuditoria}
-            disabled={procesando}
-            className="bg-slate-800 hover:bg-slate-900 text-white"
-          >
-            🧹 Nueva auditoría
-          </Button>
-        </div>
-      </div>
+    {/* Nueva auditoría */}
+    <Button
+      type="button"
+      className="flex items-center gap-2 rounded-full bg-slate-900 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-slate-800 disabled:opacity-60"
+      onClick={nuevaAuditoria}
+      disabled={procesando}
+    >
+      <span>🧹</span>
+      <span>Nueva auditoría</span>
+    </Button>
+
+    {/* Guardar cambios de observaciones (si ya lo tienes implementado) */}
+    <Button
+      type="button"
+      className="flex items-center gap-2 rounded-full bg-emerald-700 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-emerald-800 disabled:opacity-60"
+      onClick={guardarObservaciones}
+      disabled={procesando}
+    >
+      <span>💾</span>
+      <span>Guardar cambios</span>
+    </Button>
+  </div>
+</div>
+
 
       {/* KPIs + toggle instalados */}
       <div className="grid gap-3 sm:grid-cols-4">
@@ -474,17 +706,13 @@ export default function AuditoriaPage() {
           </div>
         </div>
         <div className="rounded-xl border bg-white p-3 shadow-sm">
-          <div className="text-xs font-medium text-amber-600">
-            Pendientes
-          </div>
+          <div className="text-xs font-medium text-amber-600">Pendientes</div>
           <div className="mt-1 text-2xl font-semibold text-amber-700">
             {kpis.pend}
           </div>
         </div>
         <div className="rounded-xl border bg-white p-3 shadow-sm">
-          <div className="text-xs font-medium text-emerald-600">
-            Sustentadas
-          </div>
+          <div className="text-xs font-medium text-emerald-600">Sustentadas</div>
           <div className="mt-1 text-2xl font-semibold text-emerald-700">
             {kpis.sust}
           </div>
@@ -498,8 +726,8 @@ export default function AuditoriaPage() {
               onChange={(e) => setExcluirInstalados(e.target.checked)}
             />
             <span>
-              No contar equipos <span className="font-semibold">instalados</span> en
-              auditoría
+              No contar equipos{" "}
+              <span className="font-semibold">instalados</span> en auditoría
             </span>
           </label>
         </div>
@@ -558,9 +786,7 @@ export default function AuditoriaPage() {
 
           {/* Búsqueda */}
           <div className="flex-1 min-w-[220px]">
-            <span className="mb-1 block text-xs text-slate-500">
-              Buscar
-            </span>
+            <span className="mb-1 block text-xs text-slate-500">Buscar</span>
             <Input
               className="w-full"
               placeholder="🔍 SN, equipo o ubicación"
@@ -571,60 +797,72 @@ export default function AuditoriaPage() {
         </div>
 
         {/* Zona Excel / acciones masivas */}
-        <div className="mt-2 flex flex-wrap items-center gap-2 justify-between border-t pt-3">
-          <div className="flex flex-wrap gap-2">
-            <Button
-              type="button"
-              onClick={exportManifest}
-              className="bg-blue-600 hover:bg-blue-700 text-white"
-            >
-              📤 Exportar Excel (con links)
-            </Button>
+<div className="mt-2 flex flex-wrap items-center gap-2 justify-between border-t pt-3">
+  <div className="flex flex-wrap gap-2">
+    {/* Exportar Excel */}
+    <Button
+      type="button"
+      onClick={exportManifest}
+      className="flex items-center gap-2 rounded-full bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700 disabled:opacity-60"
+    >
+      <span>📤</span>
+      <span>Exportar Excel (con links)</span>
+    </Button>
 
-            <Button
-              type="button"
-              variant="outline"
-              className="border-emerald-500 text-emerald-700 hover:bg-emerald-50"
-              onClick={descargarPlantillaSN}
-            >
-              📄 Descargar plantilla SN
-            </Button>
+    {/* Plantilla SN */}
+    <Button
+      type="button"
+      variant="outline"
+      className="flex items-center gap-2 rounded-full border-slate-300 bg-white px-4 py-2 text-sm font-medium text-emerald-700 shadow-sm hover:bg-emerald-50"
+      onClick={descargarPlantillaSN}
+    >
+      <span>📄</span>
+      <span>Descargar plantilla SN</span>
+    </Button>
 
-            <label className="cursor-pointer rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 flex items-center gap-1">
-              📥 Cargar Excel (SN)
-              <input
-                type="file"
-                accept=".xlsx,.xls,.csv"
-                className="hidden"
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) onFile(f);
-                }}
-              />
-            </label>
+    {/* Cargar Excel SN */}
+    <label className="flex cursor-pointer items-center gap-2 rounded-full bg-emerald-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-emerald-700">
+      <span>📥</span>
+      <span>Cargar Excel (SN)</span>
+      <input
+        type="file"
+        accept=".xlsx,.xls,.csv"
+        className="hidden"
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (f) onFile(f);
+        }}
+      />
+    </label>
 
-            <Button
-              type="button"
-              disabled={snExcel.length === 0 || procesando}
-              onClick={marcarMasivo}
-              className="bg-purple-600 hover:bg-purple-700 text-white disabled:opacity-60"
-            >
-              ⚡ Marcar {snExcel.length || ""} SN
-            </Button>
-          </div>
+    {/* Marcar SN */}
+    <Button
+      type="button"
+      disabled={snExcel.length === 0 || procesando}
+      onClick={marcarMasivo}
+      className="flex items-center gap-2 rounded-full bg-fuchsia-500 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-fuchsia-600 disabled:opacity-60"
+    >
+      <span>⚡</span>
+      <span>Marcar SN</span>
+      {snExcel.length > 0 && (
+        <span className="rounded-full bg-white/20 px-2 py-0.5 text-xs">
+          {snExcel.length}
+        </span>
+      )}
+    </Button>
+  </div>
 
-          {/* Resumen archivo cargado */}
-          {fileName && (
-            <div className="text-xs text-slate-500 max-w-xs text-right">
-              <div className="font-medium text-slate-700 truncate">
-                Archivo: {fileName}
-              </div>
-              <div>
-                {snExcel.length} SN encontrados para marcar masivo
-              </div>
-            </div>
-          )}
-        </div>
+  {/* Resumen archivo cargado */}
+  {fileName && (
+    <div className="text-xs text-slate-500 max-w-xs text-right">
+      <div className="font-medium text-slate-700 truncate">
+        Archivo: {fileName}
+      </div>
+      <div>{snExcel.length} SN encontrados para marcar masivo</div>
+    </div>
+  )}
+</div>
+
       </div>
 
       {/* Tabla */}
@@ -645,6 +883,7 @@ export default function AuditoriaPage() {
                 <th className="p-2">Ubicación</th>
                 <th className="p-2">Auditoría</th>
                 <th className="p-2">Foto</th>
+                <th className="p-2">Observación</th>
                 <th className="p-2 text-right">Acciones</th>
               </tr>
             </thead>
@@ -654,21 +893,17 @@ export default function AuditoriaPage() {
                   <td className="p-2 font-mono text-xs text-slate-800">
                     {e.SN}
                   </td>
-                  <td className="p-2 text-slate-800">
-                    {e.equipo || "-"}
-                  </td>
+                  <td className="p-2 text-slate-800">{e.equipo || "-"}</td>
                   <td className="p-2 text-slate-700">
                     {parseFecha(e.f_despacho) || "-"}
                   </td>
                   <td className="p-2 text-slate-700">
-                    {Array.isArray(e.tecnicos) ? e.tecnicos.join(", ") : e.tecnicos || "-"}
+                    {Array.isArray(e.tecnicos)
+                      ? e.tecnicos.join(", ")
+                      : e.tecnicos || "-"}
                   </td>
-                  <td className="p-2 text-slate-700">
-                    {e.estado || "-"}
-                  </td>
-                  <td className="p-2 text-slate-700">
-                    {e.ubicacion || "-"}
-                  </td>
+                  <td className="p-2 text-slate-700">{e.estado || "-"}</td>
+                  <td className="p-2 text-slate-700">{e.ubicacion || "-"}</td>
                   <td className="p-2">
                     <span
                       className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
@@ -682,31 +917,155 @@ export default function AuditoriaPage() {
                   </td>
                   <td className="p-2">
                     {e?.auditoria?.fotoURL ? (
-                      <a
-                        href={e.auditoria.fotoURL}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-blue-600 underline text-xs"
-                      >
-                        Ver foto
-                      </a>
+                      <div className="flex items-center gap-3">
+                        {/* Indicador + tooltip con fecha */}
+                        <button
+                          type="button"
+                          className="flex items-center gap-1 text-xs text-blue-700 hover:underline"
+                          onClick={() =>
+                            setFotoModal({
+                              open: true,
+                              url: e.auditoria.fotoURL,
+                              sn: e.SN,
+                            })
+                          }
+                          title={
+                            parseFechaHora(e?.auditoria?.actualizadoEn)
+                              ? `Última actualización: ${parseFechaHora(
+                                  e?.auditoria?.actualizadoEn
+                                )}`
+                              : undefined
+                          }
+                        >
+                          <span className="inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+                          Ver foto
+                        </button>
+
+                        {/* Mini preview */}
+                        <img
+                          src={e.auditoria.fotoURL}
+                          alt={`Foto auditoría ${e.SN}`}
+                          className="h-10 w-10 rounded border object-cover cursor-pointer"
+                          onClick={() =>
+                            setFotoModal({
+                              open: true,
+                              url: e.auditoria.fotoURL,
+                              sn: e.SN,
+                            })
+                          }
+                        />
+                      </div>
                     ) : (
                       <span className="text-xs text-slate-400">Sin foto</span>
                     )}
                   </td>
+
+                  {/* Observación editable */}
+                  <td className="p-2">
+                    <Input
+                      className="h-8 text-xs"
+                      placeholder="Escribe una observación..."
+                      value={obsDraft[e.id] ?? ""}
+                      onChange={(ev) =>
+                        setObsDraft((prev) => ({
+                          ...prev,
+                          [e.id]: ev.target.value,
+                        }))
+                      }
+                    />
+                  </td>
+
+                  {/* Acciones */}
                   <td className="p-2 text-right">
-                    {e?.auditoria ? (
-                      <Button
-                        size="sm"
-                        type="button"
-                        className="bg-slate-700 hover:bg-slate-800 text-white px-3 py-1 h-7 text-xs"
-                        onClick={() => limpiarAuditoriaUno(e)}
-                      >
-                        🧹 Limpiar
-                      </Button>
-                    ) : (
-                      <span className="text-xs text-slate-400">-</span>
-                    )}
+                    <div className="flex flex-col items-end gap-1">
+                      {/* Botón Sustentar cuando está pendiente */}
+                      {e?.auditoria?.estado === "pendiente" && (
+                        <>
+                          <input
+                            id={`file-sustentar-${e.id}`}
+                            type="file"
+                            accept="image/*"
+                            className="hidden"
+                            disabled={subiendoId === e.id}
+                            onChange={(ev) => {
+                              const file = ev.target.files?.[0];
+                              if (file) {
+                                subirFotoAuditoria(e, file, {
+                                  marcarSustentado: true,
+                                });
+                                ev.target.value = "";
+                              }
+                            }}
+                          />
+
+                          <Button
+                            type="button"
+                            size="sm"
+                            className="h-7 px-3 text-xs bg-emerald-600 text-white hover:bg-emerald-700 rounded-md shadow-sm disabled:opacity-60"
+                            disabled={subiendoId === e.id}
+                            onClick={() =>
+                              document
+                                .getElementById(`file-sustentar-${e.id}`)
+                                ?.click()
+                            }
+                          >
+                            {subiendoId === e.id ? "Subiendo..." : "📷 Sustentar"}
+                          </Button>
+                        </>
+                      )}
+
+                      {/* Botón Actualizar foto cuando ya está sustentada */}
+                      {e?.auditoria?.estado === "sustentada" && (
+                        <>
+                          <input
+                            id={`file-actualizar-${e.id}`}
+                            type="file"
+                            accept="image/*"
+                            className="hidden"
+                            disabled={subiendoId === e.id}
+                            onChange={(ev) => {
+                              const file = ev.target.files?.[0];
+                              if (file) {
+                                subirFotoAuditoria(e, file, {
+                                  marcarSustentado: false,
+                                });
+                                ev.target.value = "";
+                              }
+                            }}
+                          />
+
+                          <Button
+                            type="button"
+                            size="sm"
+                            className="h-7 px-3 text-xs bg-sky-600 text-white hover:bg-sky-700 rounded-md shadow-sm disabled:opacity-60"
+                            disabled={subiendoId === e.id}
+                            onClick={() =>
+                              document
+                                .getElementById(`file-actualizar-${e.id}`)
+                                ?.click()
+                            }
+                          >
+                            {subiendoId === e.id
+                              ? "Subiendo..."
+                              : "Actualizar foto"}
+                          </Button>
+                        </>
+                      )}
+
+                      {/* Botón Limpiar */}
+                      {e?.auditoria ? (
+                        <Button
+                          size="sm"
+                          type="button"
+                          className="bg-slate-700 hover:bg-slate-800 text-white px-3 rounded-md shadow-sm disabled:opacity-60 py-1 h-7 text-xs"
+                          onClick={() => limpiarAuditoriaUno(e)}
+                        >
+                          🧹 Limpiar
+                        </Button>
+                      ) : (
+                        <span className="text-xs text-slate-400">-</span>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -715,7 +1074,7 @@ export default function AuditoriaPage() {
                 <tr>
                   <td
                     className="p-6 text-center text-slate-500 text-sm"
-                    colSpan={9}
+                    colSpan={10}
                   >
                     No hay equipos para mostrar con el filtro actual.
                   </td>
@@ -723,6 +1082,39 @@ export default function AuditoriaPage() {
               )}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* Modal para ver foto */}
+      {fotoModal.open && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+          onClick={() => setFotoModal({ open: false, url: "", sn: "" })}
+        >
+          <div
+            className="relative max-w-3xl w-[90vw] bg-white rounded-xl shadow-2xl overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-4 py-2 border-b">
+              <div className="text-sm font-medium text-slate-700">
+                Foto auditoría – SN {fotoModal.sn}
+              </div>
+              <button
+                type="button"
+                className="text-slate-500 hover:text-slate-800 text-lg"
+                onClick={() => setFotoModal({ open: false, url: "", sn: "" })}
+              >
+                ×
+              </button>
+            </div>
+            <div className="p-3 flex justify-center bg-slate-50">
+              <img
+                src={fotoModal.url}
+                alt={`Foto auditoría ${fotoModal.sn}`}
+                className="max-h-[75vh] object-contain rounded-lg"
+              />
+            </div>
+          </div>
         </div>
       )}
     </div>
