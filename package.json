@@ -9,6 +9,7 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "chart.js": "^4.5.1",
     "dayjs": "^1.11.13",
     "file-saver": "^2.0.5",
     "firebase": "^11.7.3",
@@ -22,6 +23,7 @@
     "papaparse": "^5.5.3",
     "qrcode": "^1.5.4",
     "react": "^19.0.0",
+    "react-chartjs-2": "^5.3.1",
     "react-day-picker": "^9.7.0",
     "react-dom": "^19.0.0",
     "react-hot-toast": "^2.5.2",

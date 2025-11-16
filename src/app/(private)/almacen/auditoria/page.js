@@ -24,6 +24,114 @@ import toast, { Toaster } from "react-hot-toast";
 import * as XLSX from "xlsx";
 import { format } from "date-fns";
 
+import { Doughnut } from "react-chartjs-2";
+import {
+  Chart as ChartJS,
+  ArcElement,
+  Tooltip,
+  Legend,
+} from "chart.js";
+
+ChartJS.register(ArcElement, Tooltip, Legend);
+
+
+function AuditoriaProgressChart({ sustentadas, pendientes }) {
+  const total = sustentadas + pendientes;
+  const avance = total > 0 ? (sustentadas / total) * 100 : 0;
+
+  // Colores corporativos
+  const azul = "#1E40AF";   // Sustentado
+  const rojo = "#DC2626";   // Pendiente
+
+  // Glow solo si supera 80%
+  const glow = avance >= 80 ? "0px 0px 18px rgba(30,64,175,0.55)" : "none";
+
+  const data = {
+    labels: ["Sustentado", "Pendiente"],
+    datasets: [
+      {
+        data: [sustentadas, pendientes],
+        backgroundColor: [azul, rojo],
+        borderColor: ["#ffffff", "#ffffff"],
+        borderWidth: 4,
+        hoverOffset: 8,
+      },
+    ],
+  };
+
+  const options = {
+    cutout: "70%",
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        callbacks: {
+          label: (ctx) => `${ctx.label}: ${ctx.raw}`,
+        },
+      },
+    },
+  };
+
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-gradient-to-br from-white via-slate-50 to-slate-100 p-5 shadow-md flex flex-col items-center gap-4">
+      {/* Título */}
+      <div className="w-full flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-slate-800 tracking-wide">
+          Avance General de Auditoría
+        </h3>
+        <span className="text-[11px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 border border-slate-200">
+          Sin contar instalados
+        </span>
+      </div>
+
+      {/* Gráfico + glow */}
+      <div className="relative w-44 h-44 flex items-center justify-center">
+        {avance >= 80 && (
+          <div className="absolute inset-0 rounded-full bg-blue-300 opacity-40 blur-2xl animate-pulse" />
+        )}
+
+        <div
+          style={{
+            width: "100%",
+            height: "100%",
+            filter: glow,
+            transition: "0.4s ease",
+          }}
+        >
+          <Doughnut data={data} options={options} />
+        </div>
+
+        {/* Texto central */}
+        <div className="absolute flex flex-col items-center pointer-events-none">
+          <span className="text-2xl font-bold text-slate-900">
+            {avance.toFixed(1)}%
+          </span>
+          <span className="text-[11px] text-slate-500">Sustentado</span>
+        </div>
+      </div>
+
+      {/* Mini leyenda corporativa */}
+      <div className="w-full flex items-center justify-center gap-6 mt-1 text-xs text-slate-700">
+        <div className="flex items-center gap-1.5">
+          <span
+            className="h-3 w-3 rounded-full"
+            style={{ backgroundColor: azul }}
+          />
+          <span>Sustentado ({sustentadas})</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <span
+            className="h-3 w-3 rounded-full"
+            style={{ backgroundColor: rojo }}
+          />
+          <span>Pendiente ({pendientes})</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+
 /* ==================== Helpers ==================== */
 
 const chunk = (arr, size) => {
@@ -275,6 +383,11 @@ export default function AuditoriaPage() {
     const sust = base.filter((e) => e?.auditoria?.estado === "sustentada").length;
     return { total, pend, sust };
   }, [baseParaListas]);
+
+
+
+  const pct = kpis.total > 0 ? (kpis.sust / kpis.total) * 100 : 0;
+
 
   // Listas únicas para selects
   const ubicacionesDisponibles = useMemo(
@@ -896,6 +1009,11 @@ export default function AuditoriaPage() {
         </div>
       </div>
 
+ 
+    <AuditoriaProgressChart sustentadas={kpis.sust} pendientes={kpis.pend} />
+
+
+
       {/* KPIs */}
       <div className="grid gap-3 sm:grid-cols-4">
         <div className="rounded-xl border bg-white p-3 shadow-sm">
@@ -923,7 +1041,7 @@ export default function AuditoriaPage() {
             ? "Mostrando solo equipos NO instalados."
             : "Mostrando solo equipos con estado INSTALADO."}
         </div>
-      </div>
+      </div> 
 
       {/* Filtros & acciones */}
       <div className="rounded-xl border bg-white p-4 shadow-sm space-y-3">
