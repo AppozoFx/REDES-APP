@@ -48,6 +48,24 @@ const parseFechaHora = (val) => {
   return isNaN(d.getTime()) ? "" : format(d, "d/M/yyyy HH:mm");
 };
 
+// Para export de instalados (reutiliza tu lógica)
+const convertirAFecha = (val) => {
+  if (!val) return null;
+  if (val?.toDate) return val.toDate();
+  const d = new Date(val);
+  return isNaN(d.getTime()) ? null : d;
+};
+
+const formatearFecha = (d) => (d ? format(d, "dd/MM/yyyy") : "");
+
+const parseIntSafe = (v) => {
+  const n = parseInt(v ?? 0, 10);
+  return isNaN(n) ? 0 : n;
+};
+
+const valorONulo = (v) =>
+  v === undefined || v === null || v === "" ? "" : v;
+
 // Construye refs candidatas para borrar la foto de Storage
 const buildAuditoriaRefs = (equipo) => {
   const refs = [];
@@ -84,6 +102,36 @@ const borrarFotoAuditoriaSiExiste = async (equipo) => {
   return false;
 };
 
+// Convierte una columna cuyo header coincide con headerText en HYPERLINK
+const addHyperlinksToColumn = (ws, headerText) => {
+  const ref = ws["!ref"];
+  if (!ref) return;
+  const range = XLSX.utils.decode_range(ref);
+
+  let colIndex = null;
+  for (let C = 0; C <= range.e.col; C++) {
+    const headerAddr = XLSX.utils.encode_cell({ r: 0, c: C });
+    const headerCell = ws[headerAddr];
+    if (headerCell && headerCell.v === headerText) {
+      colIndex = C;
+      break;
+    }
+  }
+  if (colIndex == null) return;
+
+  for (let R = 1; R <= range.e.row; R++) {
+    const addr = XLSX.utils.encode_cell({ r: R, c: colIndex });
+    const cell = ws[addr];
+    if (cell && typeof cell.v === "string" && cell.v.startsWith("http")) {
+      const url = cell.v;
+      ws[addr] = {
+        f: `HYPERLINK("${url}","Ver foto")`,
+        v: "Ver foto",
+      };
+    }
+  }
+};
+
 /* ==================== Página ==================== */
 
 export default function AuditoriaPage() {
@@ -95,7 +143,9 @@ export default function AuditoriaPage() {
   const [loading, setLoading] = useState(false);
   const [filtroUbicacion, setFiltroUbicacion] = useState("todas"); // ubicación general
   const [filtroEstadoGeneral, setFiltroEstadoGeneral] = useState("todos"); // estado general
-  const [excluirInstalados, setExcluirInstalados] = useState(true); // no contar instalados
+
+  // Modo: campo vs instalados
+  const [modo, setModo] = useState("campo"); // "campo" | "instalados"
 
   // Excel
   const [fileName, setFileName] = useState("");
@@ -115,7 +165,7 @@ export default function AuditoriaPage() {
   // Observaciones editadas (por id de equipo)
   const [obsDraft, setObsDraft] = useState({});
 
-  // Cargar equipos con auditoría activa
+  // Cargar equipos con auditoría activa + join con liquidacion_instalaciones
   const cargar = async () => {
     setLoading(true);
     try {
@@ -124,7 +174,49 @@ export default function AuditoriaPage() {
         where("auditoria.requiere", "==", true)
       );
       const snap = await getDocs(qRef);
-      const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      const rowsBase = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+
+      // 1) Obtener clientes de equipos instalados
+      const clientesInstalados = [
+        ...new Set(
+          rowsBase
+            .filter(
+              (e) =>
+                (e?.estado ?? "").toString().toUpperCase() === "INSTALADO" &&
+                e?.cliente
+            )
+            .map((e) => String(e.cliente).trim())
+        ),
+      ];
+
+      // 2) Traer liquidación por cliente y armar mapa
+      const mapaLiq = new Map(); // cliente -> data liquidación
+      if (clientesInstalados.length > 0) {
+        for (const grupo of chunk(clientesInstalados, 10)) {
+          const qLiq = query(
+            collection(db, "liquidacion_instalaciones"),
+            where("cliente", "in", grupo)
+          );
+          const snapLiq = await getDocs(qLiq);
+          snapLiq.forEach((d) => {
+            const data = d.data();
+            const key = String(data.cliente || "").trim();
+            if (key) {
+              mapaLiq.set(key, { id: d.id, ...data });
+            }
+          });
+        }
+      }
+
+      // 3) Enriquecer equipos con detalleInstalacion (si existe)
+      const rows = rowsBase.map((e) => {
+        const key = e.cliente ? String(e.cliente).trim() : null;
+        if (key && mapaLiq.has(key)) {
+          return { ...e, detalleInstalacion: mapaLiq.get(key) };
+        }
+        return e;
+      });
+
       setEquipos(rows);
 
       // Inicializar/mezclar observaciones sin perder lo ya escrito
@@ -152,22 +244,28 @@ export default function AuditoriaPage() {
 
   /* ========== Métricas y listas para filtros ========== */
 
-  // Base común para listas (respetando excluirInstalados y estadoAuditoria)
-  const baseParaListas = useMemo(() => {
-    let list = [...equipos];
+  // Lista base según modo (campo vs instalados)
+  const baseModo = useMemo(() => {
+    const esInstalado = (estado) =>
+      (estado ?? "").toString().toUpperCase() === "INSTALADO";
 
-    if (excluirInstalados) {
-      list = list.filter(
-        (e) => (e?.estado ?? "").toString().toUpperCase() !== "INSTALADO"
-      );
+    if (modo === "campo") {
+      return equipos.filter((e) => !esInstalado(e.estado));
     }
+    // instalados
+    return equipos.filter((e) => esInstalado(e.estado));
+  }, [equipos, modo]);
+
+  // Base común para listas (aplica estado de auditoría)
+  const baseParaListas = useMemo(() => {
+    let list = [...baseModo];
 
     if (filtroEstadoAud !== "todos") {
       list = list.filter((e) => e?.auditoria?.estado === filtroEstadoAud);
     }
 
     return list;
-  }, [equipos, excluirInstalados, filtroEstadoAud]);
+  }, [baseModo, filtroEstadoAud]);
 
   // KPIs
   const kpis = useMemo(() => {
@@ -194,18 +292,8 @@ export default function AuditoriaPage() {
   // Filtrado principal
   const equiposFiltrados = useMemo(() => {
     const q = busqueda.trim().toLowerCase();
-    return equipos.filter((e) => {
-      if (
-        excluirInstalados &&
-        (e?.estado ?? "").toString().toUpperCase() === "INSTALADO"
-      ) {
-        return false;
-      }
 
-      const okEstadoAud =
-        filtroEstadoAud === "todos"
-          ? true
-          : e?.auditoria?.estado === filtroEstadoAud;
+    return baseParaListas.filter((e) => {
       const okUbic =
         filtroUbicacion === "todas"
           ? true
@@ -220,16 +308,9 @@ export default function AuditoriaPage() {
         (e?.equipo ?? "").toLowerCase().includes(q) ||
         (e?.ubicacion ?? "").toLowerCase().includes(q);
 
-      return okEstadoAud && okUbic && okEstadoGen && okQ;
+      return okUbic && okEstadoGen && okQ;
     });
-  }, [
-    equipos,
-    filtroEstadoAud,
-    filtroUbicacion,
-    filtroEstadoGeneral,
-    busqueda,
-    excluirInstalados,
-  ]);
+  }, [baseParaListas, filtroUbicacion, filtroEstadoGeneral, busqueda]);
 
   /* ========== Acciones por fila ========== */
 
@@ -247,7 +328,7 @@ export default function AuditoriaPage() {
       // 2) Quitar campo auditoria en Firestore
       await updateDoc(doc(db, "equipos", equipo.id), { auditoria: deleteField() });
 
-      // 3) Reflejar en UI: quitamos la fila (esta vista muestra solo equipos en auditoría)
+      // 3) Reflejar en UI: quitamos la fila
       setEquipos((prev) => prev.filter((x) => x.id !== equipo.id));
 
       toast.success(`SN ${equipo.SN}: auditoría limpiada`);
@@ -484,66 +565,161 @@ export default function AuditoriaPage() {
   /* ========== Export manifest (Excel con links) ========== */
 
   const exportManifest = () => {
-    // Orden de columnas:
-    // SN | Equipo | F. Despacho | Técnicos | Ubicación | Estado | Auditoría | Observacion | FotoURL
-    const rows = equiposFiltrados.map((e) => [
-      e.SN,
-      e.equipo || "",
-      parseFecha(e.f_despacho),
-      Array.isArray(e.tecnicos) ? e.tecnicos.join(", ") : e.tecnicos || "",
-      e.ubicacion || "",
-      e.estado || "",
-      e?.auditoria?.estado || "pendiente",
-      e?.observacion || "",
-      e?.auditoria?.fotoURL || "",
-    ]);
-
-    if (rows.length === 0) {
+    if (equiposFiltrados.length === 0) {
       toast.error("No hay filas para exportar");
       return;
     }
 
-    const header = [
-      "SN",
-      "Equipo",
-      "F. Despacho",
-      "Técnicos",
-      "Ubicación",
-      "Estado",
-      "Auditoría",
-      "Observacion",
-      "FotoURL",
-    ];
+    // ---------- MODO CAMPO ----------
+    if (modo === "campo") {
+      // Orden de columnas:
+      // SN | Equipo | F. Despacho | Técnicos | Ubicación | Estado | Auditoría | Observacion | FotoURL
+      const rows = equiposFiltrados.map((e) => [
+        e.SN,
+        e.equipo || "",
+        parseFecha(e.f_despacho),
+        Array.isArray(e.tecnicos) ? e.tecnicos.join(", ") : e.tecnicos || "",
+        e.ubicacion || "",
+        e.estado || "",
+        e?.auditoria?.estado || "pendiente",
+        e?.observacion || "",
+        e?.auditoria?.fotoURL || "",
+      ]);
 
-    const ws = XLSX.utils.aoa_to_sheet([header, ...rows]);
-    const wb = XLSX.utils.book_new();
+      const header = [
+        "SN",
+        "Equipo",
+        "F. Despacho",
+        "Técnicos",
+        "Ubicación",
+        "Estado",
+        "Auditoría",
+        "Observacion",
+        "FotoURL",
+      ];
 
-    // Convertir la columna FotoURL en fórmula HYPERLINK
-    const ref = ws["!ref"];
-    if (ref) {
-      const range = XLSX.utils.decode_range(ref);
-      const FOTO_COL_INDEX = 8; // 0..8 → FotoURL
+      const ws = XLSX.utils.aoa_to_sheet([header, ...rows]);
+      addHyperlinksToColumn(ws, "FotoURL");
 
-      for (let R = 1; R <= range.e.row; ++R) {
-        const addr = XLSX.utils.encode_cell({ r: R, c: FOTO_COL_INDEX });
-        const cell = ws[addr];
-        if (cell && typeof cell.v === "string" && cell.v.startsWith("http")) {
-          const url = cell.v;
-          ws[addr] = {
-            t: "s",
-            v: "Ver foto",
-            f: `HYPERLINK("${url}","Ver foto")`,
-          };
-        }
-      }
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "AUDITORIA_CAMPO");
+      XLSX.writeFile(
+        wb,
+        `AUDITORIA-CAMPO-${new Date().toISOString().slice(0, 10)}.xlsx`
+      );
+      toast.success("Exportado (campo)");
+      return;
     }
 
-    XLSX.utils.book_append_sheet(wb, ws, "AUDITORIA");
+    // ---------- MODO INSTALADOS ----------
+    const dataExportar = equiposFiltrados.map((e, idx) => {
+      const l = e.detalleInstalacion || {};
+
+      const fecha = convertirAFecha(l.fechaInstalacion);
+      const cat5 = parseIntSafe(l.cat5e);
+      const cat6 = parseIntSafe(l.cat6);
+      const puntos = cat5 + cat6;
+
+      const planTxt = (l.planGamer ?? "").toString().trim();
+      const kitTxt = (l.kitWifiPro ?? "").toString().trim();
+      const esGamer =
+        planTxt.toUpperCase() === "GAMER" ||
+        planTxt.toUpperCase().includes("GAMER");
+      const esKit =
+        kitTxt.toUpperCase() === "KIT WIFI PRO (AL CONTADO)";
+
+      const actaVal = Array.isArray(l.acta)
+        ? l.acta.filter(Boolean).join(", ")
+        : valorONulo(l.acta);
+
+      let obsContrata = "";
+      if (cat5 > 0) {
+        const extras = [];
+        if (esGamer) extras.push("Se realizó Plan Gamer Cat.6");
+        if (esKit) extras.push("KIT WIFI PRO");
+        obsContrata = `Se realizó ${cat5} Cableado UTP Cat.5e${
+          extras.length ? " + " + extras.join(" + ") : ""
+        }`;
+      } else {
+        const extras = [];
+        if (esGamer) extras.push("Se realizó Plan Gamer Cat.6");
+        if (esKit) extras.push("KIT WIFI PRO");
+        obsContrata = extras.join(" + ");
+      }
+
+      const snMESH = (Array.isArray(l.snMESH) ? l.snMESH : []).filter(Boolean);
+      const snBOX = (Array.isArray(l.snBOX) ? l.snBOX : []).filter(Boolean);
+
+      const meshCols = {
+        "SN_MESH(1)": valorONulo(snMESH[0]),
+        "SN_MESH(2)": valorONulo(snMESH[1]),
+        "SN_MESH(3)": valorONulo(snMESH[2]),
+        "SN_MESH(4)": valorONulo(snMESH[3]),
+      };
+      const boxCols = {
+        "SN_BOX(1)": valorONulo(snBOX[0]),
+        "SN_BOX(2)": valorONulo(snBOX[1]),
+        "SN_BOX(3)": valorONulo(snBOX[2]),
+        "SN_BOX(4)": valorONulo(snBOX[3]),
+      };
+      const cantidadMesh = [snMESH[0], snMESH[1], snMESH[2], snMESH[3]].filter(
+        Boolean
+      ).length;
+
+      const cat5Cell = cat5 === 0 ? "" : cat5;
+      const cat6Cell = cat6 === 0 ? "" : cat6;
+      const puntosCell = puntos === 0 ? "" : puntos;
+      const cableadoUTP = puntos > 0 ? puntos * 25 : "";
+
+      return {
+        "N°": idx + 1,
+        "SN_Auditoria": valorONulo(e.SN),
+        "Fecha Instalación": formatearFecha(fecha),
+        "Tipo de Servicio": "INSTALACION",
+        "Nombre de Partida": "Ultima Milla",
+        "Cuadrilla": valorONulo(l.cuadrillaNombre),
+        "Acta": actaVal,
+        "Codigo Cliente": valorONulo(l.codigoCliente),
+        "Documento": valorONulo(l.documento),
+        "Cliente": valorONulo(l.cliente),
+        "Direccion": valorONulo(l.direccion),
+        "Tipo Zona": valorONulo(l.residencialCondominio),
+        "Plan": valorONulo(l.plan),
+        "SN_ONT": valorONulo(l.snONT),
+        proid: valorONulo(l.proidONT ?? l.proid),
+        ...meshCols,
+        ...boxCols,
+        SN_FONO: valorONulo(l.snFONO),
+        metraje_instalado: valorONulo(
+          l.metraje_instalado ?? l.metrajeInstalado
+        ),
+        "Cantidad mesh": cantidadMesh,
+        rotuloNapCto: valorONulo(l.rotuloNapCto),
+        "Observacion de la contrata": obsContrata || "",
+        "Cableado UTP (MTS)": cableadoUTP,
+        Observacion: valorONulo(l.observacion),
+        "Plan Gamer": valorONulo(l.planGamer),
+        KitWifiPro: valorONulo(l.kitWifiPro),
+        "Servicio Cableado Mesh": valorONulo(l.servicioCableadoMesh),
+        Cat5e: cat5Cell,
+        Cat6: cat6Cell,
+        "Puntos UTP": puntosCell,
+        "Estado Auditoría": e?.auditoria?.estado || "pendiente",
+        "Observacion Auditoría": valorONulo(e?.observacion),
+        "FotoURL Auditoría": valorONulo(e?.auditoria?.fotoURL),
+      };
+    });
+
+    const ws = XLSX.utils.json_to_sheet(dataExportar);
+    addHyperlinksToColumn(ws, "FotoURL Auditoría");
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "AUDITORIA_INSTALADOS");
     XLSX.writeFile(
       wb,
-      `AUDITORIA-MANIFEST-${new Date().toISOString().slice(0, 10)}.xlsx`
+      `AUDITORIA-INSTALADOS-${new Date().toISOString().slice(0, 10)}.xlsx`
     );
-    toast.success("Exportado");
+    toast.success("Exportado (instalados)");
   };
 
   /* ========== Guardar observaciones en lote ========== */
@@ -646,60 +822,85 @@ export default function AuditoriaPage() {
       <Toaster position="top-right" />
 
       {/* Header */}
-<div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-  <div>
-    <h2 className="text-2xl font-semibold text-slate-900">
-      📋 Auditoría de Equipos
-    </h2>
-    <p className="text-sm text-slate-500">
-      Gestiona los equipos observados, sustenta con fotos y controla el avance
-      de la auditoría de manera centralizada.
-    </p>
-  </div>
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div className="space-y-2">
+          <h2 className="text-2xl font-semibold text-slate-900">
+            📋 Auditoría de Equipos
+          </h2>
+          <p className="text-sm text-slate-500">
+            Gestiona los equipos observados, sustenta con fotos y controla el
+            avance de la auditoría de manera centralizada.
+          </p>
 
-  <div className="flex flex-wrap gap-2">
-    {/* Actualizar */}
-    <Button
-      type="button"
-      variant="outline"
-      className="flex items-center gap-2 rounded-full border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-60"
-      onClick={cargar}
-      disabled={loading || procesando}
-    >
-      <span>🔄</span>
-      <span>Actualizar</span>
-    </Button>
+          {/* Toggle modo */}
+          <div className="inline-flex rounded-full bg-slate-200 p-1 text-xs font-medium">
+            <button
+              type="button"
+              onClick={() => setModo("campo")}
+              className={`px-3 py-1 rounded-full transition ${
+                modo === "campo"
+                  ? "bg-white text-slate-900 shadow"
+                  : "text-slate-600 hover:text-slate-900"
+              }`}
+            >
+              Equipos en campo
+            </button>
+            <button
+              type="button"
+              onClick={() => setModo("instalados")}
+              className={`px-3 py-1 rounded-full transition ${
+                modo === "instalados"
+                  ? "bg-white text-slate-900 shadow"
+                  : "text-slate-600 hover:text-slate-900"
+              }`}
+            >
+              Equipos instalados
+            </button>
+          </div>
+        </div>
 
-    {/* Nueva auditoría */}
-    <Button
-      type="button"
-      className="flex items-center gap-2 rounded-full bg-slate-900 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-slate-800 disabled:opacity-60"
-      onClick={nuevaAuditoria}
-      disabled={procesando}
-    >
-      <span>🧹</span>
-      <span>Nueva auditoría</span>
-    </Button>
+        <div className="flex flex-wrap gap-2 mt-2 sm:mt-0">
+          {/* Actualizar */}
+          <Button
+            type="button"
+            variant="outline"
+            className="flex items-center gap-2 rounded-full border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-60"
+            onClick={cargar}
+            disabled={loading || procesando}
+          >
+            <span>🔄</span>
+            <span>Actualizar</span>
+          </Button>
 
-    {/* Guardar cambios de observaciones (si ya lo tienes implementado) */}
-    <Button
-      type="button"
-      className="flex items-center gap-2 rounded-full bg-emerald-700 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-emerald-800 disabled:opacity-60"
-      onClick={guardarObservaciones}
-      disabled={procesando}
-    >
-      <span>💾</span>
-      <span>Guardar cambios</span>
-    </Button>
-  </div>
-</div>
+          {/* Nueva auditoría */}
+          <Button
+            type="button"
+            className="flex items-center gap-2 rounded-full bg-slate-900 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-slate-800 disabled:opacity-60"
+            onClick={nuevaAuditoria}
+            disabled={procesando}
+          >
+            <span>🧹</span>
+            <span>Nueva auditoría</span>
+          </Button>
 
+          {/* Guardar cambios de observaciones */}
+          <Button
+            type="button"
+            className="flex items-center gap-2 rounded-full bg-emerald-700 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-emerald-800 disabled:opacity-60"
+            onClick={guardarObservaciones}
+            disabled={procesando}
+          >
+            <span>💾</span>
+            <span>Guardar cambios</span>
+          </Button>
+        </div>
+      </div>
 
-      {/* KPIs + toggle instalados */}
+      {/* KPIs */}
       <div className="grid gap-3 sm:grid-cols-4">
         <div className="rounded-xl border bg-white p-3 shadow-sm">
           <div className="text-xs font-medium text-slate-500">
-            En auditoría (según filtros)
+            En auditoría ({modo === "campo" ? "campo" : "instalados"})
           </div>
           <div className="mt-1 text-2xl font-semibold text-slate-900">
             {kpis.total}
@@ -717,19 +918,10 @@ export default function AuditoriaPage() {
             {kpis.sust}
           </div>
         </div>
-        <div className="rounded-xl border bg-white p-3 shadow-sm flex items-center">
-          <label className="flex items-center gap-2 text-xs sm:text-sm text-slate-700">
-            <input
-              type="checkbox"
-              className="h-4 w-4 rounded border-slate-300 text-emerald-600"
-              checked={excluirInstalados}
-              onChange={(e) => setExcluirInstalados(e.target.checked)}
-            />
-            <span>
-              No contar equipos{" "}
-              <span className="font-semibold">instalados</span> en auditoría
-            </span>
-          </label>
+        <div className="rounded-xl border bg-white p-3 shadow-sm flex items-center justify-center text-xs text-slate-600">
+          {modo === "campo"
+            ? "Mostrando solo equipos NO instalados."
+            : "Mostrando solo equipos con estado INSTALADO."}
         </div>
       </div>
 
@@ -797,72 +989,74 @@ export default function AuditoriaPage() {
         </div>
 
         {/* Zona Excel / acciones masivas */}
-<div className="mt-2 flex flex-wrap items-center gap-2 justify-between border-t pt-3">
-  <div className="flex flex-wrap gap-2">
-    {/* Exportar Excel */}
-    <Button
-      type="button"
-      onClick={exportManifest}
-      className="flex items-center gap-2 rounded-full bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700 disabled:opacity-60"
-    >
-      <span>📤</span>
-      <span>Exportar Excel (con links)</span>
-    </Button>
+        <div className="mt-2 flex flex-wrap items-center gap-2 justify-between border-t pt-3">
+          <div className="flex flex-wrap gap-2">
+            {/* Exportar Excel */}
+            <Button
+              type="button"
+              onClick={exportManifest}
+              className="flex items-center gap-2 rounded-full bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700 disabled:opacity-60"
+            >
+              <span>📤</span>
+              <span>
+                Exportar Excel{" "}
+                {modo === "campo" ? "(campo con links)" : "(instalados)"}
+              </span>
+            </Button>
 
-    {/* Plantilla SN */}
-    <Button
-      type="button"
-      variant="outline"
-      className="flex items-center gap-2 rounded-full border-slate-300 bg-white px-4 py-2 text-sm font-medium text-emerald-700 shadow-sm hover:bg-emerald-50"
-      onClick={descargarPlantillaSN}
-    >
-      <span>📄</span>
-      <span>Descargar plantilla SN</span>
-    </Button>
+            {/* Plantilla SN */}
+            <Button
+              type="button"
+              variant="outline"
+              className="flex items-center gap-2 rounded-full border-slate-300 bg-white px-4 py-2 text-sm font-medium text-emerald-700 shadow-sm hover:bg-emerald-50"
+              onClick={descargarPlantillaSN}
+            >
+              <span>📄</span>
+              <span>Descargar plantilla SN</span>
+            </Button>
 
-    {/* Cargar Excel SN */}
-    <label className="flex cursor-pointer items-center gap-2 rounded-full bg-emerald-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-emerald-700">
-      <span>📥</span>
-      <span>Cargar Excel (SN)</span>
-      <input
-        type="file"
-        accept=".xlsx,.xls,.csv"
-        className="hidden"
-        onChange={(e) => {
-          const f = e.target.files?.[0];
-          if (f) onFile(f);
-        }}
-      />
-    </label>
+            {/* Cargar Excel SN */}
+            <label className="flex cursor-pointer items-center gap-2 rounded-full bg-emerald-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-emerald-700">
+              <span>📥</span>
+              <span>Cargar Excel (SN)</span>
+              <input
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) onFile(f);
+                }}
+              />
+            </label>
 
-    {/* Marcar SN */}
-    <Button
-      type="button"
-      disabled={snExcel.length === 0 || procesando}
-      onClick={marcarMasivo}
-      className="flex items-center gap-2 rounded-full bg-fuchsia-500 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-fuchsia-600 disabled:opacity-60"
-    >
-      <span>⚡</span>
-      <span>Marcar SN</span>
-      {snExcel.length > 0 && (
-        <span className="rounded-full bg-white/20 px-2 py-0.5 text-xs">
-          {snExcel.length}
-        </span>
-      )}
-    </Button>
-  </div>
+            {/* Marcar SN */}
+            <Button
+              type="button"
+              disabled={snExcel.length === 0 || procesando}
+              onClick={marcarMasivo}
+              className="flex items-center gap-2 rounded-full bg-fuchsia-500 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-fuchsia-600 disabled:opacity-60"
+            >
+              <span>⚡</span>
+              <span>Marcar SN</span>
+              {snExcel.length > 0 && (
+                <span className="rounded-full bg-white/20 px-2 py-0.5 text-xs">
+                  {snExcel.length}
+                </span>
+              )}
+            </Button>
+          </div>
 
-  {/* Resumen archivo cargado */}
-  {fileName && (
-    <div className="text-xs text-slate-500 max-w-xs text-right">
-      <div className="font-medium text-slate-700 truncate">
-        Archivo: {fileName}
-      </div>
-      <div>{snExcel.length} SN encontrados para marcar masivo</div>
-    </div>
-  )}
-</div>
-
+          {/* Resumen archivo cargado */}
+          {fileName && (
+            <div className="text-xs text-slate-500 max-w-xs text-right">
+              <div className="font-medium text-slate-700 truncate">
+                Archivo: {fileName}
+              </div>
+              <div>{snExcel.length} SN encontrados para marcar masivo</div>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Tabla */}
@@ -877,10 +1071,16 @@ export default function AuditoriaPage() {
               <tr className="text-left text-xs font-medium text-slate-600">
                 <th className="p-2">SN</th>
                 <th className="p-2">Equipo</th>
-                <th className="p-2">F. Despacho</th>
-                <th className="p-2">Técnicos</th>
+                <th className="p-2">
+                  {modo === "instalados" ? "F. Instalación" : "F. Despacho"}
+                </th>
+                <th className="p-2">
+                  {modo === "instalados" ? "Cliente" : "Técnicos"}
+                </th>
                 <th className="p-2">Estado</th>
-                <th className="p-2">Ubicación</th>
+                <th className="p-2">
+                  {modo === "instalados" ? "Dirección" : "Ubicación"}
+                </th>
                 <th className="p-2">Auditoría</th>
                 <th className="p-2">Foto</th>
                 <th className="p-2">Observación</th>
@@ -888,187 +1088,201 @@ export default function AuditoriaPage() {
               </tr>
             </thead>
             <tbody>
-              {equiposFiltrados.map((e) => (
-                <tr key={e.id} className="border-t hover:bg-slate-50/60">
-                  <td className="p-2 font-mono text-xs text-slate-800">
-                    {e.SN}
-                  </td>
-                  <td className="p-2 text-slate-800">{e.equipo || "-"}</td>
-                  <td className="p-2 text-slate-700">
-                    {parseFecha(e.f_despacho) || "-"}
-                  </td>
-                  <td className="p-2 text-slate-700">
-                    {Array.isArray(e.tecnicos)
-                      ? e.tecnicos.join(", ")
-                      : e.tecnicos || "-"}
-                  </td>
-                  <td className="p-2 text-slate-700">{e.estado || "-"}</td>
-                  <td className="p-2 text-slate-700">{e.ubicacion || "-"}</td>
-                  <td className="p-2">
-                    <span
-                      className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
-                        e?.auditoria?.estado === "sustentada"
-                          ? "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100"
-                          : "bg-amber-50 text-amber-700 ring-1 ring-amber-100"
-                      }`}
-                    >
-                      {e?.auditoria?.estado || "pendiente"}
-                    </span>
-                  </td>
-                  <td className="p-2">
-                    {e?.auditoria?.fotoURL ? (
-                      <div className="flex items-center gap-3">
-                        {/* Indicador + tooltip con fecha */}
-                        <button
-                          type="button"
-                          className="flex items-center gap-1 text-xs text-blue-700 hover:underline"
-                          onClick={() =>
-                            setFotoModal({
-                              open: true,
-                              url: e.auditoria.fotoURL,
-                              sn: e.SN,
-                            })
-                          }
-                          title={
-                            parseFechaHora(e?.auditoria?.actualizadoEn)
-                              ? `Última actualización: ${parseFechaHora(
-                                  e?.auditoria?.actualizadoEn
-                                )}`
-                              : undefined
-                          }
-                        >
-                          <span className="inline-flex h-2 w-2 rounded-full bg-emerald-500" />
-                          Ver foto
-                        </button>
-
-                        {/* Mini preview */}
-                        <img
-                          src={e.auditoria.fotoURL}
-                          alt={`Foto auditoría ${e.SN}`}
-                          className="h-10 w-10 rounded border object-cover cursor-pointer"
-                          onClick={() =>
-                            setFotoModal({
-                              open: true,
-                              url: e.auditoria.fotoURL,
-                              sn: e.SN,
-                            })
-                          }
-                        />
-                      </div>
-                    ) : (
-                      <span className="text-xs text-slate-400">Sin foto</span>
-                    )}
-                  </td>
-
-                  {/* Observación editable */}
-                  <td className="p-2">
-                    <Input
-                      className="h-8 text-xs"
-                      placeholder="Escribe una observación..."
-                      value={obsDraft[e.id] ?? ""}
-                      onChange={(ev) =>
-                        setObsDraft((prev) => ({
-                          ...prev,
-                          [e.id]: ev.target.value,
-                        }))
-                      }
-                    />
-                  </td>
-
-                  {/* Acciones */}
-                  <td className="p-2 text-right">
-                    <div className="flex flex-col items-end gap-1">
-                      {/* Botón Sustentar cuando está pendiente */}
-                      {e?.auditoria?.estado === "pendiente" && (
-                        <>
-                          <input
-                            id={`file-sustentar-${e.id}`}
-                            type="file"
-                            accept="image/*"
-                            className="hidden"
-                            disabled={subiendoId === e.id}
-                            onChange={(ev) => {
-                              const file = ev.target.files?.[0];
-                              if (file) {
-                                subirFotoAuditoria(e, file, {
-                                  marcarSustentado: true,
-                                });
-                                ev.target.value = "";
-                              }
-                            }}
-                          />
-
-                          <Button
+              {equiposFiltrados.map((e) => {
+                const l = e.detalleInstalacion || {};
+                return (
+                  <tr key={e.id} className="border-t hover:bg-slate-50/60">
+                    <td className="p-2 font-mono text-xs text-slate-800">
+                      {e.SN}
+                    </td>
+                    <td className="p-2 text-slate-800">{e.equipo || "-"}</td>
+                    <td className="p-2 text-slate-700">
+                      {modo === "instalados"
+                        ? formatearFecha(convertirAFecha(l.fechaInstalacion)) ||
+                          "-"
+                        : parseFecha(e.f_despacho) || "-"}
+                    </td>
+                    <td className="p-2 text-slate-700">
+                      {modo === "instalados"
+                        ? valorONulo(l.cliente) || "-"
+                        : Array.isArray(e.tecnicos)
+                        ? e.tecnicos.join(", ")
+                        : e.tecnicos || "-"}
+                    </td>
+                    <td className="p-2 text-slate-700">{e.estado || "-"}</td>
+                    <td className="p-2 text-slate-700">
+                      {modo === "instalados"
+                        ? valorONulo(l.direccion) || "-"
+                        : e.ubicacion || "-"}
+                    </td>
+                    <td className="p-2">
+                      <span
+                        className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
+                          e?.auditoria?.estado === "sustentada"
+                            ? "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100"
+                            : "bg-amber-50 text-amber-700 ring-1 ring-amber-100"
+                        }`}
+                      >
+                        {e?.auditoria?.estado || "pendiente"}
+                      </span>
+                    </td>
+                    <td className="p-2">
+                      {e?.auditoria?.fotoURL ? (
+                        <div className="flex items-center gap-3">
+                          {/* Indicador + tooltip con fecha */}
+                          <button
                             type="button"
-                            size="sm"
-                            className="h-7 px-3 text-xs bg-emerald-600 text-white hover:bg-emerald-700 rounded-md shadow-sm disabled:opacity-60"
-                            disabled={subiendoId === e.id}
+                            className="flex items-center gap-1 text-xs text-blue-700 hover:underline"
                             onClick={() =>
-                              document
-                                .getElementById(`file-sustentar-${e.id}`)
-                                ?.click()
+                              setFotoModal({
+                                open: true,
+                                url: e.auditoria.fotoURL,
+                                sn: e.SN,
+                              })
+                            }
+                            title={
+                              parseFechaHora(e?.auditoria?.actualizadoEn)
+                                ? `Última actualización: ${parseFechaHora(
+                                    e?.auditoria?.actualizadoEn
+                                  )}`
+                                : undefined
                             }
                           >
-                            {subiendoId === e.id ? "Subiendo..." : "📷 Sustentar"}
-                          </Button>
-                        </>
-                      )}
+                            <span className="inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+                            Ver foto
+                          </button>
 
-                      {/* Botón Actualizar foto cuando ya está sustentada */}
-                      {e?.auditoria?.estado === "sustentada" && (
-                        <>
-                          <input
-                            id={`file-actualizar-${e.id}`}
-                            type="file"
-                            accept="image/*"
-                            className="hidden"
-                            disabled={subiendoId === e.id}
-                            onChange={(ev) => {
-                              const file = ev.target.files?.[0];
-                              if (file) {
-                                subirFotoAuditoria(e, file, {
-                                  marcarSustentado: false,
-                                });
-                                ev.target.value = "";
-                              }
-                            }}
-                          />
-
-                          <Button
-                            type="button"
-                            size="sm"
-                            className="h-7 px-3 text-xs bg-sky-600 text-white hover:bg-sky-700 rounded-md shadow-sm disabled:opacity-60"
-                            disabled={subiendoId === e.id}
+                          {/* Mini preview */}
+                          <img
+                            src={e.auditoria.fotoURL}
+                            alt={`Foto auditoría ${e.SN}`}
+                            className="h-10 w-10 rounded border object-cover cursor-pointer"
                             onClick={() =>
-                              document
-                                .getElementById(`file-actualizar-${e.id}`)
-                                ?.click()
+                              setFotoModal({
+                                open: true,
+                                url: e.auditoria.fotoURL,
+                                sn: e.SN,
+                              })
                             }
-                          >
-                            {subiendoId === e.id
-                              ? "Subiendo..."
-                              : "Actualizar foto"}
-                          </Button>
-                        </>
-                      )}
-
-                      {/* Botón Limpiar */}
-                      {e?.auditoria ? (
-                        <Button
-                          size="sm"
-                          type="button"
-                          className="bg-slate-700 hover:bg-slate-800 text-white px-3 rounded-md shadow-sm disabled:opacity-60 py-1 h-7 text-xs"
-                          onClick={() => limpiarAuditoriaUno(e)}
-                        >
-                          🧹 Limpiar
-                        </Button>
+                          />
+                        </div>
                       ) : (
-                        <span className="text-xs text-slate-400">-</span>
+                        <span className="text-xs text-slate-400">Sin foto</span>
                       )}
-                    </div>
-                  </td>
-                </tr>
-              ))}
+                    </td>
+
+                    {/* Observación editable */}
+                    <td className="p-2">
+                      <Input
+                        className="h-8 text-xs"
+                        placeholder="Escribe una observación..."
+                        value={obsDraft[e.id] ?? ""}
+                        onChange={(ev) =>
+                          setObsDraft((prev) => ({
+                            ...prev,
+                            [e.id]: ev.target.value,
+                          }))
+                        }
+                      />
+                    </td>
+
+                    {/* Acciones */}
+                    <td className="p-2 text-right">
+                      <div className="flex flex-col items-end gap-1">
+                        {/* Botón Sustentar cuando está pendiente */}
+                        {e?.auditoria?.estado === "pendiente" && (
+                          <>
+                            <input
+                              id={`file-sustentar-${e.id}`}
+                              type="file"
+                              accept="image/*"
+                              className="hidden"
+                              disabled={subiendoId === e.id}
+                              onChange={(ev) => {
+                                const file = ev.target.files?.[0];
+                                if (file) {
+                                  subirFotoAuditoria(e, file, {
+                                    marcarSustentado: true,
+                                  });
+                                  ev.target.value = "";
+                                }
+                              }}
+                            />
+
+                            <Button
+                              type="button"
+                              size="sm"
+                              className="h-7 px-3 text-xs bg-emerald-600 text-white hover:bg-emerald-700 rounded-md shadow-sm disabled:opacity-60"
+                              disabled={subiendoId === e.id}
+                              onClick={() =>
+                                document
+                                  .getElementById(`file-sustentar-${e.id}`)
+                                  ?.click()
+                              }
+                            >
+                              {subiendoId === e.id
+                                ? "Subiendo..."
+                                : "📷 Sustentar"}
+                            </Button>
+                          </>
+                        )}
+
+                        {/* Botón Actualizar foto cuando ya está sustentada */}
+                        {e?.auditoria?.estado === "sustentada" && (
+                          <>
+                            <input
+                              id={`file-actualizar-${e.id}`}
+                              type="file"
+                              accept="image/*"
+                              className="hidden"
+                              disabled={subiendoId === e.id}
+                              onChange={(ev) => {
+                                const file = ev.target.files?.[0];
+                                if (file) {
+                                  subirFotoAuditoria(e, file, {
+                                    marcarSustentado: false,
+                                  });
+                                  ev.target.value = "";
+                                }
+                              }}
+                            />
+
+                            <Button
+                              type="button"
+                              size="sm"
+                              className="h-7 px-3 text-xs bg-sky-600 text-white hover:bg-sky-700 rounded-md shadow-sm disabled:opacity-60"
+                              disabled={subiendoId === e.id}
+                              onClick={() =>
+                                document
+                                  .getElementById(`file-actualizar-${e.id}`)
+                                  ?.click()
+                              }
+                            >
+                              {subiendoId === e.id
+                                ? "Subiendo..."
+                                : "Actualizar foto"}
+                            </Button>
+                          </>
+                        )}
+
+                        {/* Botón Limpiar */}
+                        {e?.auditoria ? (
+                          <Button
+                            size="sm"
+                            type="button"
+                            className="bg-slate-700 hover:bg-slate-800 text-white px-3 rounded-md shadow-sm disabled:opacity-60 py-1 h-7 text-xs"
+                            onClick={() => limpiarAuditoriaUno(e)}
+                          >
+                            🧹 Limpiar
+                          </Button>
+                        ) : (
+                          <span className="text-xs text-slate-400">-</span>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
 
               {equiposFiltrados.length === 0 && (
                 <tr>
