@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { db } from "@/firebaseConfig";
-import { collection, getDocs } from "firebase/firestore";
+import { collection, getDocs, query, where } from "firebase/firestore";
 import { useAuth } from "@/app/context/AuthContext";
 import dayjs from "dayjs";
 import * as XLSX from "xlsx";
@@ -15,6 +15,7 @@ export default function InstalacionesGerencia() {
   const [usuarios, setUsuarios] = useState([]);
   const [inconcert, setInconcert] = useState([]);
   const [inconcertIndex, setInconcertIndex] = useState(new Map()); // telNorm -> { latest, list[] }
+  
 
   const [horaActual, setHoraActual] = useState(dayjs());
   const [filtros, setFiltros] = useState({
@@ -79,28 +80,83 @@ export default function InstalacionesGerencia() {
     return 0;
   };
 
+  const fechaSeleccionada = filtros.fecha;
+
+
   // ---- Carga inicial ----
   useEffect(() => {
-    const fetchData = async () => {
-      const [instSnap, cuadSnap, userSnap, icSnap] = await Promise.all([
-        getDocs(collection(db, "instalaciones")),
+  let alive = true;
+
+  const fetchData = async () => {
+    try {
+      // ===============================
+      // 1️⃣ Fecha seleccionada (día completo)
+      // ===============================
+      const fecha = filtros.fecha; // YYYY-MM-DD
+      const inicioDia = `${fecha}T00:00:00.000Z`;
+      const finDia = `${fecha}T23:59:59.999Z`;
+
+      // ===============================
+      // 2️⃣ Instalaciones SOLO DEL DÍA
+      // ===============================
+      const instQuery = query(
+        collection(db, "instalaciones"),
+        where("fechaInstalacion", ">=", inicioDia),
+        where("fechaInstalacion", "<=", finDia)
+      );
+
+      const [instSnap, cuadSnap, userSnap] = await Promise.all([
+        getDocs(instQuery),
         getDocs(collection(db, "cuadrillas")),
         getDocs(collection(db, "usuarios")),
-        getDocs(collection(db, "inconcert")),
       ]);
 
       const instalacionesArr = instSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       const cuadrillasArr = cuadSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       const usuariosArr = userSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      const inconcertArr = icSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
-      // Índice: telNorm -> { latest, list[] }
+      // ===============================
+      // 3️⃣ Teléfonos únicos del día
+      // ===============================
+      const telefonosUnicos = Array.from(
+        new Set(
+          instalacionesArr
+            .map(getInstPhone)
+            .map(normalizePhone)
+            .filter(Boolean)
+        )
+      );
+
+      // ===============================
+      // 4️⃣ InConcert SOLO de esos teléfonos
+      // (en bloques de 30 por límite Firestore)
+      // ===============================
+      const inconcertArr = [];
+
+      for (let i = 0; i < telefonosUnicos.length; i += 30) {
+        const chunk = telefonosUnicos.slice(i, i + 30);
+
+        const icQuery = query(
+          collection(db, "inconcert"),
+          where("telefonoCliente", "in", chunk)
+        );
+
+        const snap = await getDocs(icQuery);
+        snap.forEach(d => inconcertArr.push({ id: d.id, ...d.data() }));
+      }
+
+      // ===============================
+      // 5️⃣ Construir índice InConcert (MISMA LÓGICA)
+      // ===============================
       const mapIdx = new Map();
+
       for (const r of inconcertArr) {
         const tel = normalizePhone(r.telefonoCliente ?? r._dirCrudo);
         if (!tel) continue;
+
         const ts = parseFechaICtoTs(r);
         const item = { ...r, _ts: ts };
+
         const cur = mapIdx.get(tel);
         if (!cur) {
           mapIdx.set(tel, { latest: item, list: [item] });
@@ -109,18 +165,32 @@ export default function InstalacionesGerencia() {
           if (ts > (cur.latest?._ts ?? 0)) cur.latest = item;
         }
       }
+
       for (const [, bucket] of mapIdx) {
         bucket.list.sort((a, b) => (b._ts ?? 0) - (a._ts ?? 0));
       }
+
+      // ===============================
+      // 6️⃣ Setear estado
+      // ===============================
+      if (!alive) return;
 
       setInstalaciones(instalacionesArr);
       setCuadrillas(cuadrillasArr);
       setUsuarios(usuariosArr);
       setInconcert(inconcertArr);
       setInconcertIndex(mapIdx);
-    };
-    fetchData();
-  }, []);
+
+    } catch (err) {
+      console.error("🔥 Error cargando datos:", err);
+    }
+  };
+
+  fetchData();
+  return () => { alive = false; };
+
+}, [fechaSeleccionada]);
+
 
   // Usuarios por UID
   const mapaUsuarios = {};
