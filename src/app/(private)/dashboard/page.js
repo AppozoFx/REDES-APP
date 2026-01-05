@@ -3,7 +3,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { db } from "@/firebaseConfig";
-import { collection, getDocs } from "firebase/firestore";
+import { collection, getDocs, query, where } from "firebase/firestore";
 import dayjs from "dayjs";
 import durationPlugin from "dayjs/plugin/duration";
 import { useAuth } from "@/context/AuthContext";
@@ -258,54 +258,88 @@ export default function Dashboard() {
     return () => { montado.current = false; };
   }, []);
 
+
+  const toISOStart = (d) => dayjs(d).startOf("day").toISOString(); // 00:00:00.000Z
+const toISOEnd = (d) => dayjs(d).endOf("day").toISOString();     // 23:59:59.999Z
+
   // Carga inicial
   useEffect(() => {
-    if (initializing || !user) return;
+  if (initializing || !user) return;
 
-    (async () => {
-      try {
-        setCargando(true);
+  (async () => {
+    try {
+      setCargando(true);
 
-        const snapC = await getDocs(collection(db, "asistencia_cuadrillas"));
-        const asistenciaC = snapC.docs.map(d => ({ id: d.id, ...d.data() }));
+      // ✅ Rango total necesario: (prev + actual)
+      const minISO = toISOStart(periodoPrev.start);
+      const maxISO = toISOEnd(periodo.end);
 
-        const snapT = await getDocs(collection(db, "asistencia_tecnicos"));
-        const asistenciaT = snapT.docs.map(d => ({ id: d.id, ...d.data() }));
+      // 1) usuarios (cárgalo una vez si quieres, pero aquí lo dejo igual)
+      const snapU = await getDocs(collection(db, "usuarios"));
+      const idxU = {};
+      snapU.docs.forEach(d => { idxU[d.id] = d.data(); });
 
-        const snapI = await getDocs(collection(db, "instalaciones"));
-        const instalaciones = snapI.docs.map(d => {
-          const raw = d.data();
-          const _fechaYMD =
-            typeof raw.fechaInstalacion === "string"
-              ? dayjs(raw.fechaInstalacion).format("YYYY-MM-DD")
-              : raw.fechaInstalacion?.toDate
-              ? dayjs(raw.fechaInstalacion.toDate()).format("YYYY-MM-DD")
-              : "";
-          const _cuadrillaNombre = raw.cuadrillaNombre || raw.cuadrilla || "";
-          return { id: d.id, ...raw, _fechaYMD, _cuadrillaNombre };
-        });
+      // 2) instalaciones (solo rango)
+      // si fechaInstalacion es string ISO → funciona perfecto con comparación lexicográfica
+      const qInst = query(
+        collection(db, "instalaciones"),
+        where("fechaInstalacion", ">=", minISO),
+        where("fechaInstalacion", "<=", maxISO)
+      );
+      const snapI = await getDocs(qInst);
+      const instalaciones = snapI.docs.map(d => {
+        const raw = d.data();
 
-        const snapU = await getDocs(collection(db, "usuarios"));
-        const idxU = {};
-        snapU.docs.forEach(d => { idxU[d.id] = d.data(); });
+        const _fechaYMD =
+          typeof raw.fechaInstalacion === "string"
+            ? dayjs(raw.fechaInstalacion).format("YYYY-MM-DD")
+            : raw.fechaInstalacion?.toDate
+            ? dayjs(raw.fechaInstalacion.toDate()).format("YYYY-MM-DD")
+            : "";
 
-        if (!montado.current) return;
-        setAsistenciaCuadrillasAll(asistenciaC);
-        setAsistenciaTecnicosAll(asistenciaT);
-        setInstalacionesAll(instalaciones);
-        setUsuariosIdx(idxU);
-      } catch (err) {
-        console.warn("Error dashboard:", err?.code || err?.message);
-        if (!montado.current) return;
-        setAsistenciaCuadrillasAll([]);
-        setAsistenciaTecnicosAll([]);
-        setInstalacionesAll([]);
-        setUsuariosIdx({});
-      } finally {
-        if (montado.current) setCargando(false);
-      }
-    })();
-  }, [initializing, user]);
+        const _cuadrillaNombre = raw.cuadrillaNombre || raw.cuadrilla || "";
+        return { id: d.id, ...raw, _fechaYMD, _cuadrillaNombre };
+      });
+
+      // 3) asistencia_cuadrillas (usa campo "fecha" YYYY-MM-DD)
+      const minYMD = periodoPrev.start.format("YYYY-MM-DD");
+      const maxYMD = periodo.end.format("YYYY-MM-DD");
+
+      const qAsisC = query(
+        collection(db, "asistencia_cuadrillas"),
+        where("fecha", ">=", minYMD),
+        where("fecha", "<=", maxYMD)
+      );
+      const snapC = await getDocs(qAsisC);
+      const asistenciaC = snapC.docs.map(d => ({ id: d.id, ...d.data() }));
+
+      // 4) asistencia_tecnicos (si tiene "fecha" similar)
+      const qAsisT = query(
+        collection(db, "asistencia_tecnicos"),
+        where("fecha", ">=", minYMD),
+        where("fecha", "<=", maxYMD)
+      );
+      const snapT = await getDocs(qAsisT);
+      const asistenciaT = snapT.docs.map(d => ({ id: d.id, ...d.data() }));
+
+      if (!montado.current) return;
+      setUsuariosIdx(idxU);
+      setInstalacionesAll(instalaciones);
+      setAsistenciaCuadrillasAll(asistenciaC);
+      setAsistenciaTecnicosAll(asistenciaT);
+    } catch (err) {
+      console.warn("Error dashboard:", err?.code || err?.message);
+      if (!montado.current) return;
+      setAsistenciaCuadrillasAll([]);
+      setAsistenciaTecnicosAll([]);
+      setInstalacionesAll([]);
+      setUsuariosIdx({});
+    } finally {
+      if (montado.current) setCargando(false);
+    }
+  })();
+}, [initializing, user, periodo.start.valueOf(), periodo.end.valueOf(), periodoPrev.start.valueOf(), periodoPrev.end.valueOf()]);
+
 
   /* =========================
      Helpers
@@ -316,6 +350,9 @@ export default function Dashboard() {
     if (x.toDate) return dayjs(x.toDate()).format("YYYY-MM-DD");
     return "";
   };
+
+  
+
 
   const personaDe = (v) => {
     const s = String(v ?? "").trim();
@@ -539,7 +576,7 @@ export default function Dashboard() {
         return true;
       });
     return filas;
-  }, [asistenciaCuadrillasAll, setFechas, idxMetaCuadrilla, fZona, fRegion, fTipoCuadrilla, fGestor, fCoordinador, fCuadrilla, usuariosIdx]);
+  }, [asistenciaCuadrillasAll, setFechas, idxMetaCuadrilla, fZona, fRegion, fTipoCuadrilla, fGestor, fCoordinador, fCuadrilla, fRC, usuariosIdx]);
 
   // Resumen de asistencia (con técnicos y sin descanso)
   const resumenAsistencia = useMemo(() => {
@@ -578,6 +615,25 @@ export default function Dashboard() {
     () => instalacionesSel.filter(i => (i.tipoServicio || "").toLowerCase() !== "garantia"),
     [instalacionesSel]
   );
+
+
+
+  const barrasFinalizadasPorDia = useMemo(() => {
+  // Base por día del período
+  const base = fechasSel.map((d) => ({ dia: String(dayjs(d).date()), finalizadas: 0 }
+));
+  const idx = Object.fromEntries(base.map((r) => [r.dia, r]));
+
+  for (const i of instSelValidas) {
+    if ((i.estado || "").toLowerCase() !== "finalizada") continue;
+    const k = String(dayjs(i._fechaYMD).date());
+
+    if (idx[k]) idx[k].finalizadas += 1;
+  }
+
+  return base;
+}, [instSelValidas, fechasSel.join("|")]);
+
 
 
   const barrasDiaCuadrilla = useMemo(() => {
@@ -905,6 +961,19 @@ const barrasCuadrillas = useMemo(() => {
 }, [instSelValidas]);
 
 
+const idxInstPorFecha = useMemo(() => {
+  const m = new Map();
+  for (const i of instalacionesAll) {
+    const k = i._fechaYMD || "";
+    if (!k) continue;
+    if (!m.has(k)) m.set(k, []);
+    m.get(k).push(i);
+  }
+  return m;
+}, [instalacionesAll]);
+
+
+
 
   /* =========================
      Tendencia 7 días (anclada al último día del período seleccionado)
@@ -913,8 +982,9 @@ const barrasCuadrillas = useMemo(() => {
 // ✅ Agrega esto en su lugar:
 const tendenciaPeriodo = useMemo(() => {
   return fechasSel.map((ymd) => {
-    const instD = instalacionesAll
-      .filter(i => i._fechaYMD === ymd)
+    const instRaw = idxInstPorFecha.get(ymd) || [];
+
+    const instD = instRaw
       .map(i => ({
         ...i,
         _zona: i.zona || "Sin Zona",
@@ -934,10 +1004,11 @@ const tendenciaPeriodo = useMemo(() => {
   });
 }, [
   fechasSel.join("|"),
-  instalacionesAll,
-  fZona, fRegion, fTipoCuadrilla, fGestor, fCoordinador, fCuadrilla,
+  idxInstPorFecha,
+  fZona, fRegion, fTipoCuadrilla, fGestor, fCoordinador, fCuadrilla, fRC,
   usuariosIdx
 ]);
+
 
 
   /* =========================
@@ -1299,25 +1370,49 @@ const tendenciaPeriodo = useMemo(() => {
       {/* Gráficos principales */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         {rangoTipo !== "dia" && (
-  <Card title="Finalizadas por día y cuadrilla (Top 5)">
-  {barrasDiaCuadrilla.series.length === 0 ? (
-    <Empty title="Sin datos" desc="No hay finalizadas válidas para el período y filtros." />
-  ) : (
-    <ResponsiveContainer width="100%" height={280}>
-      <BarChart data={barrasDiaCuadrilla.data} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
-        <CartesianGrid strokeDasharray="3 3" />
-        <XAxis dataKey="dia" />
-        <YAxis allowDecimals={false} />
-        <Tooltip />
-        <Legend />
-        {barrasDiaCuadrilla.series.map((s, idx) => (
-          <Bar key={s} dataKey={s} name={s} />
-        ))}
-      </BarChart>
-    </ResponsiveContainer>
-  )}
-</Card>
+  <Card
+    title={
+      rangoTipo === "mes"
+        ? "Finalizadas por día (Total)"
+        : "Finalizadas por día y cuadrilla (Top 5)"
+    }
+  >
+    {rangoTipo === "mes" ? (
+      barrasFinalizadasPorDia.every((r) => r.finalizadas === 0) ? (
+        <Empty title="Sin datos" desc="No hay finalizadas válidas para el período y filtros." />
+      ) : (
+        <ResponsiveContainer width="100%" height={280}>
+          <BarChart data={barrasFinalizadasPorDia} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis dataKey="dia" />
+            <YAxis allowDecimals={false} />
+            <Tooltip />
+            <Legend />
+            <Bar dataKey="finalizadas" name="Finalizadas" />
+          </BarChart>
+        </ResponsiveContainer>
+      )
+    ) : (
+      barrasDiaCuadrilla.series.length === 0 ? (
+        <Empty title="Sin datos" desc="No hay finalizadas válidas para el período y filtros." />
+      ) : (
+        <ResponsiveContainer width="100%" height={280}>
+          <BarChart data={barrasDiaCuadrilla.data} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis dataKey="dia" />
+            <YAxis allowDecimals={false} />
+            <Tooltip />
+            <Legend />
+            {barrasDiaCuadrilla.series.map((s) => (
+              <Bar key={s} dataKey={s} name={s} />
+            ))}
+          </BarChart>
+        </ResponsiveContainer>
+      )
+    )}
+  </Card>
 )}
+
 
 
         <Card title="Estados de instalaciones (válidas)">

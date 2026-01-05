@@ -3,7 +3,15 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { db } from "@/firebaseConfig";
-import { collection, getDocs, onSnapshot } from "firebase/firestore";
+import {
+  collection,
+  getDocs,
+  onSnapshot,
+  query,
+  where,
+  orderBy,
+  limit,
+} from "firebase/firestore";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/app/context/AuthContext";
 import dynamic from "next/dynamic";
@@ -43,8 +51,6 @@ const MarkerClusterGroup = dynamic(
   () => import("react-leaflet-markercluster").then((m) => ({ default: m.default || m })),
   { ssr: false }
 );
-
-
 
 /* Paleta: Agendada = negro */
 const colorByEstado = {
@@ -136,6 +142,14 @@ const EstadoPill = ({ estado }) => {
   );
 };
 
+// helpers: fecha string ISO -> comparables por prefijo YYYY-MM-DD
+const toDayKeyFromISO = (s) => {
+  if (!s) return "";
+  // "2025-04-11T08:00:00.000Z" => "2025-04-11"
+  if (typeof s === "string") return s.slice(0, 10);
+  return "";
+};
+
 export default function MapaInstalaciones() {
   const router = useRouter();
   const { userData } = useAuth();
@@ -190,12 +204,49 @@ export default function MapaInstalaciones() {
     }
   }, [userData, router]);
 
+  /**
+   * ✅ CAMBIO CLAVE (sin cambiar tu lógica):
+   * Antes: getDocs(collection("instalaciones")) => trae TODO (explota cuotas)
+   * Ahora: trae SOLO el día seleccionado usando rango de strings ISO por prefijo.
+   * Mantiene tu filtrado por cuadrilla/estado en el cliente (misma UX).
+   */
   useEffect(() => {
+    let cancelled = false;
+
     (async () => {
-      const snap = await getDocs(collection(db, "instalaciones"));
-      setInstalaciones(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+      const ref = collection(db, "instalaciones");
+
+      // Como fechaInstalacion es string tipo ISO "YYYY-MM-DDTHH:mm:ss.sssZ",
+      // usamos rango por strings basados en "YYYY-MM-DD"
+      const startStr = dayjs(fechaFiltro).format("YYYY-MM-DD");
+      const endStr = dayjs(fechaFiltro).add(1, "day").format("YYYY-MM-DD");
+
+      // Rangos por prefijo: >= "2025-04-11" y < "2025-04-12"
+      // Esto funciona porque el ISO empieza con "YYYY-MM-DD..."
+      const qA = query(
+        ref,
+        where("fechaInstalacion", ">=", startStr),
+        where("fechaInstalacion", "<", endStr),
+        orderBy("fechaInstalacion", "asc"),
+        limit(5000)
+      );
+
+      const snap = await getDocs(qA);
+      if (cancelled) return;
+
+      // misma estructura de datos
+      let rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+
+      // mismo filtro de servicio (tu lógica actual)
+      rows = rows.filter((i) => i.tipoServicio !== "GARANTIA");
+
+      setInstalaciones(rows);
     })();
-  }, []);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [fechaFiltro]);
 
   // Suscripción en tiempo real: datos base de cuadrillas y su última ubicación (campos lat/lng/lastLocationAt en el doc)
   useEffect(() => {
@@ -244,11 +295,13 @@ export default function MapaInstalaciones() {
 
       const coincideEstado = !filtroEstado || i.estado === filtroEstado;
 
+      // Mantengo tu lógica: comparar por día (YYYY-MM-DD)
+      // Optimizado para string ISO: slice(0,10) evita dayjs() por cada fila
       let f = "";
       if (i.fechaInstalacion) {
         if (typeof i.fechaInstalacion === "string") {
-          f = dayjs(i.fechaInstalacion).format("YYYY-MM-DD");
-        } else if (typeof i.fechaInstalacion.toDate === "function") {
+          f = toDayKeyFromISO(i.fechaInstalacion);
+        } else if (typeof i.fechaInstalacion?.toDate === "function") {
           f = dayjs(i.fechaInstalacion.toDate()).format("YYYY-MM-DD");
         }
       }
@@ -325,6 +378,7 @@ export default function MapaInstalaciones() {
         }
         .dark .leaflet-tooltip.cuad-tooltip { color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,0.6); }
       `}</style>
+
       {/* Encabezado */}
       <header className="flex items-center justify-between gap-4">
         <div>
@@ -415,29 +469,24 @@ export default function MapaInstalaciones() {
           >
             <TileLayer key={base} attribution={baseLayers[base].attr} url={baseLayers[base].url} />
 
-
-
-              {/* ORDERS / INSTALACIONES agrupadas */}
-<MarkerClusterGroup
-  key={`inst-${clusterKey}`}
-  chunkedLoading
-  showCoverageOnHover={false}
-  spiderfyOnEveryZoom
-  spiderfyOnMaxZoom
-  spiderLegPolylineOptions={{ weight: 3, color: '#2563eb', opacity: 0.85 }}
-  spiderfyDistanceMultiplier={1.6}
-  iconCreateFunction={createClusterIcon}
->
-
-
+            {/* ORDERS / INSTALACIONES agrupadas */}
+            <MarkerClusterGroup
+              key={`inst-${clusterKey}`}
+              chunkedLoading
+              showCoverageOnHover={false}
+              spiderfyOnEveryZoom
+              spiderfyOnMaxZoom
+              spiderLegPolylineOptions={{ weight: 3, color: "#2563eb", opacity: 0.85 }}
+              spiderfyDistanceMultiplier={1.6}
+              iconCreateFunction={createClusterIcon}
+            >
               {instalacionesFiltradas.map((i) => {
                 const { lat, lng } = i.coordenadas || {};
                 if (!lat || !lng) return null;
                 const color = colorByEstado[i.estado] || colorByEstado.default;
 
                 const fecha = (() => {
-                  if (typeof i.fechaInstalacion === "string")
-                    return dayjs(i.fechaInstalacion).format("YYYY-MM-DD");
+                  if (typeof i.fechaInstalacion === "string") return toDayKeyFromISO(i.fechaInstalacion);
                   if (typeof i.fechaInstalacion?.toDate === "function")
                     return dayjs(i.fechaInstalacion.toDate()).format("YYYY-MM-DD");
                   return "—";
@@ -446,14 +495,15 @@ export default function MapaInstalaciones() {
                 return (
                   <Marker key={i.id} position={[lat, lng]} icon={createCircleIcon(color)}>
                     <Tooltip
-                          permanent
-                          direction="top"
-                          offset={[0, -14]}
-                          opacity={1}
-                          className="cloud-tooltip"
-                                  >
-                                    {(i.cuadrillaNombre || i.cuadrilla || "—").toUpperCase()}
-                                  </Tooltip>
+                      permanent
+                      direction="top"
+                      offset={[0, -14]}
+                      opacity={1}
+                      className="cloud-tooltip"
+                    >
+                      {(i.cuadrillaNombre || i.cuadrilla || "—").toUpperCase()}
+                    </Tooltip>
+
                     <Popup maxWidth={380}>
                       <div className="text-xs text-gray-900 dark:text-gray-100">
                         <div className="rounded-xl border p-3 bg-white dark:bg-gray-800 shadow-sm">
@@ -540,83 +590,89 @@ export default function MapaInstalaciones() {
                   </Marker>
                 );
               })}
-              </MarkerClusterGroup>
-              
+            </MarkerClusterGroup>
 
-              <MarkerClusterGroup
-                chunkedLoading
-                showCoverageOnHover={false}
-                spiderfyOnEveryZoom
-                spiderfyOnMaxZoom
-                spiderLegPolylineOptions={{ weight: 3, color: '#10b981', opacity: 0.85 }}
-                spiderfyDistanceMultiplier={2}
-                iconCreateFunction={createClusterIcon}
-              >
-                {Object.entries(ubicacionesCuadrillas).map(([id, p]) => {
-                  if (!p?.lat || !p?.lng) return null;
-                  const info = cuadrillasInfo[id] || {};
-                  const categoria = String(info.categoria || p.tipo || "").toLowerCase();
-                  const esCondominio = categoria.includes("condominio");
-                  const nombre = info.nombre || info.id || id;
-                  const fechaTxt = (() => {
-                    try {
-                      if (!p.updatedAt) return "";
-                      if (typeof p.updatedAt?.toDate === "function") {
-                        return dayjs(p.updatedAt.toDate()).format("DD/MM HH:mm");
-                      }
-                      if (typeof p.updatedAt === "number") {
-                        return dayjs(p.updatedAt).format("DD/MM HH:mm");
-                      }
-                      if (typeof p.updatedAt === "string") {
-                        return String(p.updatedAt);
-                      }
-                    } catch (_) {}
-                    return "";
-                  })();
+            {/* CUADRILLAS EN TIEMPO REAL */}
+            <MarkerClusterGroup
+              chunkedLoading
+              showCoverageOnHover={false}
+              spiderfyOnEveryZoom
+              spiderfyOnMaxZoom
+              spiderLegPolylineOptions={{ weight: 3, color: "#10b981", opacity: 0.85 }}
+              spiderfyDistanceMultiplier={2}
+              iconCreateFunction={createClusterIcon}
+            >
+              {Object.entries(ubicacionesCuadrillas).map(([id, p]) => {
+                if (!p?.lat || !p?.lng) return null;
+                const info = cuadrillasInfo[id] || {};
+                const categoria = String(info.categoria || p.tipo || "").toLowerCase();
+                const esCondominio = categoria.includes("condominio");
+                const nombre = info.nombre || info.id || id;
+                const fechaTxt = (() => {
+                  try {
+                    if (!p.updatedAt) return "";
+                    if (typeof p.updatedAt?.toDate === "function") {
+                      return dayjs(p.updatedAt.toDate()).format("DD/MM HH:mm");
+                    }
+                    if (typeof p.updatedAt === "number") {
+                      return dayjs(p.updatedAt).format("DD/MM HH:mm");
+                    }
+                    if (typeof p.updatedAt === "string") {
+                      return String(p.updatedAt);
+                    }
+                  } catch (_) {}
+                  return "";
+                })();
 
-                  return (
-                    <Marker
-                      key={`c-${id}`}
-                      position={[p.lat, p.lng]}
-                      icon={createCuadrillaIcon(esCondominio)}
-                      zIndexOffset={1000}
+                return (
+                  <Marker
+                    key={`c-${id}`}
+                    position={[p.lat, p.lng]}
+                    icon={createCuadrillaIcon(esCondominio)}
+                    zIndexOffset={1000}
+                  >
+                    <Tooltip
+                      permanent
+                      direction="top"
+                      offset={[0, -16]}
+                      opacity={1}
+                      className="cuad-tooltip"
                     >
-                    <Tooltip permanent direction="top" offset={[0, -16]} opacity={1} className="cuad-tooltip">
                       {nombre?.toUpperCase?.() || String(nombre)}
                     </Tooltip>
-                      <Popup maxWidth={320}>
-                        <div className="text-xs text-gray-900 dark:text-gray-100">
-                          <div className="font-semibold mb-1">{nombre}</div>
-                          <div className="mb-2">Categoría: {info.categoria || p.tipo || "-"}</div>
-                          {fechaTxt && (
-                            <div className="text-gray-500">Actualizado: {fechaTxt}</div>
-                          )}
-                          <div className="flex items-center justify-center gap-2 pt-2">
-                            <a
-                              href={`https://www.google.com/maps/search/?api=1&query=${p.lat},${p.lng}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="px-3 py-1.5 rounded-md font-semibold shadow-md hover:shadow-lg transition"
-                              style={{ background: "#2563eb", color: "#ffffff" }}
-                            >
-                              Google Maps
-                            </a>
-                            <a
-                              href={`https://waze.com/ul?ll=${p.lat},${p.lng}&navigate=yes`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="px-3 py-1.5 rounded-md font-semibold shadow-md hover:shadow-lg transition"
-                              style={{ background: "#7c3aed", color: "#ffffff" }}
-                            >
-                              Waze
-                            </a>
-                          </div>
+
+                    <Popup maxWidth={320}>
+                      <div className="text-xs text-gray-900 dark:text-gray-100">
+                        <div className="font-semibold mb-1">{nombre}</div>
+                        <div className="mb-2">Categoría: {info.categoria || p.tipo || "-"}</div>
+                        {fechaTxt && <div className="text-gray-500">Actualizado: {fechaTxt}</div>}
+
+                        <div className="flex items-center justify-center gap-2 pt-2">
+                          <a
+                            href={`https://www.google.com/maps/search/?api=1&query=${p.lat},${p.lng}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="px-3 py-1.5 rounded-md font-semibold shadow-md hover:shadow-lg transition"
+                            style={{ background: "#2563eb", color: "#ffffff" }}
+                          >
+                            Google Maps
+                          </a>
+                          <a
+                            href={`https://waze.com/ul?ll=${p.lat},${p.lng}&navigate=yes`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="px-3 py-1.5 rounded-md font-semibold shadow-md hover:shadow-lg transition"
+                            style={{ background: "#7c3aed", color: "#ffffff" }}
+                          >
+                            Waze
+                          </a>
                         </div>
-                      </Popup>
-                    </Marker>
-                  );
-                })}
-              </MarkerClusterGroup>
+                      </div>
+                    </Popup>
+                  </Marker>
+                );
+              })}
+            </MarkerClusterGroup>
           </MapContainer>
         )}
       </div>
