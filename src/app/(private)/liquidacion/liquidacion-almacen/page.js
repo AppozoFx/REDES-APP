@@ -195,30 +195,34 @@ export default function LiquidacionInstalaciones() {
         rows = rows.filter((r) => norm(r.cuadrillaNombre).includes(qText));
       }
 
+  
       // Fallback si no vino nada
-      if (snap.size === 0) {
-        const qB = query(ref, where("estado", "in", ["Finalizada", "finalizada"]));
-        snap = await getDocs(qB);
-        let all = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+if (snap.size === 0) {
+  // PLAN B: rango por STRING (asumiendo formato YYYY-MM-DD o ISO que empieza con YYYY-MM-DD)
+  const startStr = dayjs(filtros.fecha).format("YYYY-MM-DD");
+  const endStr = dayjs(filtros.fecha).add(1, "day").format("YYYY-MM-DD");
 
-        const start = dayjs(filtros.fecha).startOf("day");
-        const end = dayjs(filtros.fecha).add(1, "day").startOf("day");
+  const qB = query(
+    ref,
+    where("estado", "in", ["Finalizada", "finalizada"]),
+    where("fechaInstalacion", ">=", startStr),
+    where("fechaInstalacion", "<", endStr),
+    orderBy("fechaInstalacion", "asc"),
+    limit(800)
+  );
 
-        all = all.filter((r) => {
-          if (!isFinalizada(r.estado)) return false;
-          const d = toDateLoose(r.fechaInstalacion);
-          if (!d) return false;
-          return inRangeInclusiveStart(d, start, end);
-        });
+  snap = await getDocs(qB);
+  let all = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
 
-        all = all.filter((r) => (r.tipoServicio || "") !== "GARANTIA");
-        if (qText) {
-          all = all.filter((r) => norm(r.cuadrillaNombre).includes(qText));
-        }
+  all = all.filter((r) => (r.tipoServicio || "") !== "GARANTIA");
 
-        rows = all;
-        setCompatMode(true);
-      }
+  const qText = norm(debouncedCuadrilla);
+  if (qText) all = all.filter((r) => norm(r.cuadrillaNombre).includes(qText));
+
+  rows = all;
+  setCompatMode(true);
+}
+
 
       setLastQueryInfo({
         fecha: filtros.fecha,
@@ -279,27 +283,35 @@ export default function LiquidacionInstalaciones() {
       qLiq,
       async (snapshot) => {
         if (snapshot.empty) {
-          const all = await getDocs(ref);
-          const info = {};
-          const start = dayjs(filtros.fecha).startOf("day");
-          const end = dayjs(filtros.fecha).add(1, "day").startOf("day");
+  const startStr = dayjs(filtros.fecha).format("YYYY-MM-DD");
+  const endStr = dayjs(filtros.fecha).add(1, "day").format("YYYY-MM-DD");
 
-          all.docs.forEach((d) => {
-            const data = d.data();
-            const fecha = toDateLoose(data.fechaInstalacion);
-            if (!fecha) return;
-            if (inRangeInclusiveStart(fecha, start, end)) {
-              info[d.id] = {
-                corregido: data.corregido === true,
-                fechaInstalacion: fecha,
-                fechaLiquidacion: toDateLoose(data.fechaLiquidacion),
-                cuadrillaNombre: data.cuadrillaNombre || "",
-              };
-            }
-          });
-          setLiquidadasInfo(info);
-          return;
-        }
+  const qB = query(
+    ref,
+    where("fechaInstalacion", ">=", startStr),
+    where("fechaInstalacion", "<", endStr),
+    orderBy("fechaInstalacion", "asc"),
+    limit(2000)
+  );
+
+  const snapB = await getDocs(qB);
+
+  const info = {};
+  snapB.docs.forEach((d) => {
+    const data = d.data();
+    const fecha = toDateLoose(data.fechaInstalacion);
+    info[d.id] = {
+      corregido: data.corregido === true,
+      fechaInstalacion: fecha,
+      fechaLiquidacion: toDateLoose(data.fechaLiquidacion),
+      cuadrillaNombre: data.cuadrillaNombre || "",
+    };
+  });
+
+  setLiquidadasInfo(info);
+  return;
+}
+
 
         const info = {};
         snapshot.docs.forEach((d) => {

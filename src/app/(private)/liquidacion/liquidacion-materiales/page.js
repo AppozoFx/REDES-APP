@@ -8,6 +8,10 @@ import {
   doc,
   runTransaction,
   serverTimestamp,
+  // ✅ NUEVO
+  query,
+  where,
+  orderBy,
 } from "firebase/firestore";
 import dayjs from "dayjs";
 import customParseFormat from "dayjs/plugin/customParseFormat";
@@ -98,8 +102,26 @@ export default function LiquidacionMaterialesPage() {
   // Focus para escanear ACTA directo
   const scanRef = useRef(null);
 
-  const obtenerInsts = async () => {
-    const snap = await getDocs(collection(db, "liquidacion_instalaciones"));
+  /**
+   * ✅ CAMBIO CLAVE:
+   * Cargar SOLO el mes desde Firestore usando strings ISO
+   * - inicio = "YYYY-MM-01T00:00:00.000Z"
+   * - fin    = primer día del siguiente mes "YYYY-MM-01T00:00:00.000Z"
+   *
+   * Esto evita traer TODO 2025/2026 y elimina el timeout.
+   */
+  const obtenerInsts = async (yyyyMM) => {
+    const inicioISO = dayjs(`${yyyyMM}-01`).startOf("month").toISOString();
+    const finISO = dayjs(`${yyyyMM}-01`).add(1, "month").startOf("month").toISOString();
+
+    const q = query(
+      collection(db, "liquidacion_instalaciones"),
+      where("fechaInstalacion", ">=", inicioISO),
+      where("fechaInstalacion", "<", finISO),
+      orderBy("fechaInstalacion", "desc")
+    );
+
+    const snap = await getDocs(q);
     const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
     setInsts(data);
   };
@@ -108,14 +130,20 @@ export default function LiquidacionMaterialesPage() {
      Cargar base
   ========================= */
   useEffect(() => {
+    let alive = true;
+
     (async () => {
       try {
         setCargando(true);
-        // 1) instalaciones
-        await obtenerInsts();
+
+        // 1) instalaciones: SOLO MES actual
+        await obtenerInsts(dayjs().format("YYYY-MM"));
+        if (!alive) return;
 
         // 2) índice de cuadrillas (por campo "nombre")
         const snapC = await getDocs(collection(db, "cuadrillas"));
+        if (!alive) return;
+
         const idx = {};
         snapC.docs.forEach((d) => {
           const v = d.data();
@@ -131,12 +159,37 @@ export default function LiquidacionMaterialesPage() {
         setCuadrillasIdx(idx);
       } catch (e) {
         console.error(e);
-        toast.error("Error cargando datos");
+        toast.error(e?.message || "Error cargando datos");
       } finally {
-        setCargando(false);
+        if (alive) setCargando(false);
       }
     })();
+
+    return () => {
+      alive = false;
+    };
   }, []);
+
+  // ✅ recargar instalaciones cuando cambie el mes
+  useEffect(() => {
+    let alive = true;
+
+    (async () => {
+      try {
+        setCargando(true);
+        await obtenerInsts(filtros.mes);
+      } catch (e) {
+        console.error(e);
+        toast.error(e?.message || "Error cargando datos del mes");
+      } finally {
+        if (alive) setCargando(false);
+      }
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, [filtros.mes]);
 
   /* =========================
      Filtro
@@ -162,8 +215,7 @@ export default function LiquidacionMaterialesPage() {
       const okQ = q ? hay.includes(q) : true;
 
       const liq = tieneDatosLiq(l);
-      const okEstado =
-        ver === "todos" ? true : ver === "liquidados" ? liq : !liq;
+      const okEstado = ver === "todos" ? true : ver === "liquidados" ? liq : !liq;
 
       return okMes && okDia && okCuad && okQ && okEstado;
     });
@@ -196,22 +248,14 @@ export default function LiquidacionMaterialesPage() {
     const dir = sortDir === "asc" ? 1 : -1;
 
     const getComparable = (row, key) => {
-      if (key === "estado") {
-        return tieneDatosLiq(row) ? 1 : 0;
-      }
+      if (key === "estado") return tieneDatosLiq(row) ? 1 : 0;
       if (key === "fecha") {
         const f = convFecha(row.fechaInstalacion);
         return f ? f.getTime() : 0;
       }
-      if (key === "cuadrilla") {
-        return norm(row.cuadrillaNombre || "");
-      }
-      if (key === "codigo") {
-        return norm(row.codigoCliente || "");
-      }
-      if (key === "cliente") {
-        return norm(row.cliente || "");
-      }
+      if (key === "cuadrilla") return norm(row.cuadrillaNombre || "");
+      if (key === "codigo") return norm(row.codigoCliente || "");
+      if (key === "cliente") return norm(row.cliente || "");
       return "";
     };
 
@@ -229,16 +273,14 @@ export default function LiquidacionMaterialesPage() {
   }, [instsFiltradas, sortKey, sortDir]);
 
   const toggleSort = (key) => {
-    if (sortKey === key) {
-      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-    } else {
+    if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else {
       setSortKey(key);
       setSortDir("asc");
     }
   };
 
-  const sortIcon = (key) =>
-    sortKey !== key ? "↕" : sortDir === "asc" ? "▲" : "▼";
+  const sortIcon = (key) => (sortKey !== key ? "↕" : sortDir === "asc" ? "▲" : "▼");
 
   /* =========================
      Handlers UI
@@ -252,14 +294,12 @@ export default function LiquidacionMaterialesPage() {
     setFormFila((p) => ({
       ...p,
       [rowId]: {
-        // defaults
         acta: "",
         rotulo: "",
         metraje: "",
         templadores: "",
         hebillas: "",
         clevis: "",
-        // override
         ...p[rowId],
         [campo]: valor,
       },
@@ -268,7 +308,6 @@ export default function LiquidacionMaterialesPage() {
 
   /* =========================
      Exportar XLSX (filtrado + ordenado)
-     Columnas: Estado, Fecha, Cuadrilla, Código, Cliente, Acta
   ========================= */
   const exportXLSX = () => {
     const headers = ["Estado", "Fecha", "Cuadrilla", "Código", "Cliente", "Acta"];
@@ -285,12 +324,8 @@ export default function LiquidacionMaterialesPage() {
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
 
-    // Auto width sencillo
     const colWidths = headers.map((h, i) => {
-      const maxLen = Math.max(
-        h.length,
-        ...rows.map((r) => String(r[i] ?? "").length)
-      );
+      const maxLen = Math.max(h.length, ...rows.map((r) => String(r[i] ?? "").length));
       return { wch: Math.min(Math.max(maxLen + 2, 10), 40) };
     });
     ws["!cols"] = colWidths;
@@ -323,39 +358,35 @@ export default function LiquidacionMaterialesPage() {
     const soloRes = esResidencial(row);
 
     const prevTempl = soloRes && Number.isFinite(row.templadores) ? row.templadores : 0;
-    const prevHebi  = soloRes && Number.isFinite(row.hebillas) ? row.hebillas : 0;
-    const prevClev  = soloRes && Number.isFinite(row.clevis) ? row.clevis : 0;
+    const prevHebi = soloRes && Number.isFinite(row.hebillas) ? row.hebillas : 0;
+    const prevClev = soloRes && Number.isFinite(row.clevis) ? row.clevis : 0;
 
     const newTempl = soloRes ? Math.max(0, toInt(templInput !== "" ? templInput : prevTempl)) : 0;
-    const newHebi  = soloRes ? Math.max(0, toInt(hebiInput  !== "" ? hebiInput  : prevHebi )) : 0;
-    const newClev  = soloRes ? Math.max(0, toInt(clevInput  !== "" ? clevInput  : prevClev )) : 0;
+    const newHebi = soloRes ? Math.max(0, toInt(hebiInput !== "" ? hebiInput : prevHebi)) : 0;
+    const newClev = soloRes ? Math.max(0, toInt(clevInput !== "" ? clevInput : prevClev)) : 0;
 
-    if (!acta)  return toast.error("Ingresa/scanea el Nº de ACTA.");
+    if (!acta) return toast.error("Ingresa/scanea el Nº de ACTA.");
     if (!rotulo) return toast.error("Ingresa el rótulo NAP/CTO.");
 
     const dMetraje = Math.max(0, newMetraje - prevMetraje);
-    const dTempl   = Math.max(0, newTempl   - prevTempl);
-    const dHebi    = Math.max(0, newHebi    - prevHebi);
-    const dClev    = Math.max(0, newClev    - prevClev);
+    const dTempl = Math.max(0, newTempl - prevTempl);
+    const dHebi = Math.max(0, newHebi - prevHebi);
+    const dClev = Math.max(0, newClev - prevClev);
 
     const cuadrillaNombre = row.cuadrillaNombre || "";
     const cuadrillaInfo = cuadrillasIdx[cuadrillaNombre];
-    if (!cuadrillaInfo?.id) {
-      return toast.error(`No encuentro el ID de la cuadrilla "${cuadrillaNombre}".`);
-    }
+    if (!cuadrillaInfo?.id) return toast.error(`No encuentro el ID de la cuadrilla "${cuadrillaNombre}".`);
     const cuadId = cuadrillaInfo.id;
 
     setGuardandoId(row.id);
     try {
       await runTransaction(db, async (tx) => {
         const refsOpt = [];
-        if (dMetraje > 0) {
-          refsOpt.push(doc(db, "cuadrillas", cuadId, "stock_materiales", "bobina"));
-        }
+        if (dMetraje > 0) refsOpt.push(doc(db, "cuadrillas", cuadId, "stock_materiales", "bobina"));
         if (soloRes) {
           if (dTempl > 0) refsOpt.push(doc(db, "cuadrillas", cuadId, "stock_materiales", "templadores"));
-          if (dHebi  > 0) refsOpt.push(doc(db, "cuadrillas", cuadId, "stock_materiales", "hebillas"));
-          if (dClev  > 0) refsOpt.push(doc(db, "cuadrillas", cuadId, "stock_materiales", "clevis"));
+          if (dHebi > 0) refsOpt.push(doc(db, "cuadrillas", cuadId, "stock_materiales", "hebillas"));
+          if (dClev > 0) refsOpt.push(doc(db, "cuadrillas", cuadId, "stock_materiales", "clevis"));
         }
 
         const snaps = await Promise.all(refsOpt.map((r) => tx.get(r)));
@@ -387,6 +418,7 @@ export default function LiquidacionMaterialesPage() {
           actualizadoEn: serverTimestamp(),
           actualizadoPor: userData?.displayName || userData?.email || "Sistema",
         };
+
         if (dMetraje > 0) {
           const refBob = doc(db, "cuadrillas", cuadId, "stock_materiales", "bobina");
           const cur = getCant("bobina");
@@ -416,15 +448,22 @@ export default function LiquidacionMaterialesPage() {
           rotuloNapCto: rotulo,
           metraje_instalado: newMetraje,
           templadores: soloRes ? newTempl : 0,
-          hebillas:    soloRes ? newHebi  : 0,
-          clevis:      soloRes ? newClev  : 0,
+          hebillas: soloRes ? newHebi : 0,
+          clevis: soloRes ? newClev : 0,
           materiales_liq_por: userData?.displayName || userData?.email || "Sistema",
           materiales_liq_en: serverTimestamp(),
         });
       });
 
-      toast.success(tieneDatosLiq(row) ? "✅ Actualización realizada (diferencia aplicada)." : "✅ Liquidación registrada.");
-      await obtenerInsts();
+      toast.success(
+        tieneDatosLiq(row)
+          ? "✅ Actualización realizada (diferencia aplicada)."
+          : "✅ Liquidación registrada."
+      );
+
+      // ✅ recarga solo el mes actual
+      await obtenerInsts(filtros.mes);
+
       setFormFila((p) => {
         const cp = { ...p };
         delete cp[row.id];
@@ -466,9 +505,6 @@ export default function LiquidacionMaterialesPage() {
 
       {/* Indicadores */}
       <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        
-
-        {/* Vista (filtrados) */}
         <div className="rounded-lg border p-3 bg-white">
           <div className="text-xs text-gray-500 mb-1">Totales</div>
           <div className="flex items-center gap-3">
@@ -560,39 +596,19 @@ export default function LiquidacionMaterialesPage() {
         <table className="min-w-full text-sm">
           <thead className="bg-gray-100 sticky top-0 z-10">
             <tr className="text-center text-gray-700 font-semibold">
-              <th
-                className="p-2 border w-32 cursor-pointer select-none hover:bg-gray-200"
-                onClick={() => toggleSort("estado")}
-                title="Ordenar por Estado"
-              >
+              <th className="p-2 border w-32 cursor-pointer select-none hover:bg-gray-200" onClick={() => toggleSort("estado")} title="Ordenar por Estado">
                 Estado <span className="text-xs opacity-70">{sortIcon("estado")}</span>
               </th>
-              <th
-                className="p-2 border w-36 cursor-pointer select-none hover:bg-gray-200"
-                onClick={() => toggleSort("fecha")}
-                title="Ordenar por Fecha"
-              >
+              <th className="p-2 border w-36 cursor-pointer select-none hover:bg-gray-200" onClick={() => toggleSort("fecha")} title="Ordenar por Fecha">
                 Fecha <span className="text-xs opacity-70">{sortIcon("fecha")}</span>
               </th>
-              <th
-                className="p-2 border w-48 cursor-pointer select-none hover:bg-gray-200"
-                onClick={() => toggleSort("cuadrilla")}
-                title="Ordenar por Cuadrilla"
-              >
+              <th className="p-2 border w-48 cursor-pointer select-none hover:bg-gray-200" onClick={() => toggleSort("cuadrilla")} title="Ordenar por Cuadrilla">
                 Cuadrilla <span className="text-xs opacity-70">{sortIcon("cuadrilla")}</span>
               </th>
-              <th
-                className="p-2 border w-28 cursor-pointer select-none hover:bg-gray-200"
-                onClick={() => toggleSort("codigo")}
-                title="Ordenar por Código"
-              >
+              <th className="p-2 border w-28 cursor-pointer select-none hover:bg-gray-200" onClick={() => toggleSort("codigo")} title="Ordenar por Código">
                 Código <span className="text-xs opacity-70">{sortIcon("codigo")}</span>
               </th>
-              <th
-                className="p-2 border w-56 cursor-pointer select-none hover:bg-gray-200"
-                onClick={() => toggleSort("cliente")}
-                title="Ordenar por Cliente"
-              >
+              <th className="p-2 border w-56 cursor-pointer select-none hover:bg-gray-200" onClick={() => toggleSort("cliente")} title="Ordenar por Cliente">
                 Cliente <span className="text-xs opacity-70">{sortIcon("cliente")}</span>
               </th>
 
@@ -603,6 +619,7 @@ export default function LiquidacionMaterialesPage() {
               <th className="p-2 border min-w-[620px]">Liquidar / Datos existentes</th>
             </tr>
           </thead>
+
           <tbody>
             {cargando ? (
               <tr>
@@ -621,9 +638,7 @@ export default function LiquidacionMaterialesPage() {
                 const saving = guardandoId === l.id;
 
                 const ya = tieneDatosLiq(l);
-                const estadoCls = ya
-                  ? "bg-green-100 text-green-800 border-green-300"
-                  : "bg-amber-100 text-amber-800 border-amber-300";
+                const estadoCls = ya ? "bg-green-100 text-green-800 border-green-300" : "bg-amber-100 text-amber-800 border-amber-300";
 
                 const actaExist = (l.acta || "").trim();
                 const rotuloExist = (l.rotuloNapCto || "").trim();
@@ -634,15 +649,12 @@ export default function LiquidacionMaterialesPage() {
 
                 return (
                   <tr key={l.id} className="hover:bg-gray-50 align-top">
-                    {/* Estado */}
                     <td className="border p-2 text-center">
                       <span className={`inline-block px-2 py-0.5 rounded-full text-xs border ${estadoCls}`}>
                         {ya ? "✅ Liquidado" : "🟠 Pendiente"}
                       </span>
                       {l.materiales_liq_en && (
-                        <div className="mt-1 text-[11px] text-gray-500">
-                          {`Último: ${fmt(convFecha(l.materiales_liq_en))}`}
-                        </div>
+                        <div className="mt-1 text-[11px] text-gray-500">{`Último: ${fmt(convFecha(l.materiales_liq_en))}`}</div>
                       )}
                     </td>
 
@@ -651,6 +663,7 @@ export default function LiquidacionMaterialesPage() {
                     <td className="border p-2 text-center">{l.codigoCliente || "-"}</td>
                     <td className="border p-2">{l.cliente || "-"}</td>
                     <td className="border p-2 text-center">{l.snONT || "-"}</td>
+
                     <td className="border p-2">
                       {mesh.length ? (
                         <div className="flex flex-wrap gap-1 justify-center">
@@ -660,8 +673,11 @@ export default function LiquidacionMaterialesPage() {
                             </span>
                           ))}
                         </div>
-                      ) : "-"}
+                      ) : (
+                        "-"
+                      )}
                     </td>
+
                     <td className="border p-2">
                       {box.length ? (
                         <div className="flex flex-wrap gap-1 justify-center">
@@ -671,13 +687,15 @@ export default function LiquidacionMaterialesPage() {
                             </span>
                           ))}
                         </div>
-                      ) : "-"}
+                      ) : (
+                        "-"
+                      )}
                     </td>
+
                     <td className="border p-2 text-center">{l.snFONO || "-"}</td>
 
-                    {/* Bloque de liquidación + datos existentes */}
                     <td className="border p-2">
-                      {/* Chips de datos existentes */}
+                      {/* Chips */}
                       <div className="mb-2 flex flex-wrap gap-1.5">
                         {actaExist ? (
                           <span className="px-2 py-0.5 rounded-full text-xs bg-slate-100 border text-slate-700">ACTA: {actaExist}</span>
@@ -715,7 +733,7 @@ export default function LiquidacionMaterialesPage() {
                         )}
                       </div>
 
-                      {/* Formulario de liquidación / actualización */}
+                      {/* Form */}
                       <div className="grid gap-2 md:grid-cols-6">
                         <input
                           ref={scanRef}
@@ -754,9 +772,11 @@ export default function LiquidacionMaterialesPage() {
                           className={cls(
                             "border rounded px-2 py-1",
                             (typeof l.metraje_instalado === "number" && v.metraje === undefined) ||
-                            (v.metraje !== undefined && String(v.metraje).trim() !== "") ? "border-green-400" : ""
+                              (v.metraje !== undefined && String(v.metraje).trim() !== "")
+                              ? "border-green-400"
+                              : ""
                           )}
-                          value={v.metraje !== undefined ? v.metraje : (typeof l.metraje_instalado === "number" ? l.metraje_instalado : "")}
+                          value={v.metraje !== undefined ? v.metraje : typeof l.metraje_instalado === "number" ? l.metraje_instalado : ""}
                           onChange={(e) => setField(l.id, "metraje", e.target.value)}
                           title="Metraje instalado (descuenta bobina)"
                         />
@@ -770,9 +790,11 @@ export default function LiquidacionMaterialesPage() {
                               className={cls(
                                 "border rounded px-2 py-1",
                                 (typeof l.templadores === "number" && v.templadores === undefined) ||
-                                (v.templadores !== undefined && String(v.templadores).trim() !== "") ? "border-green-400" : ""
+                                  (v.templadores !== undefined && String(v.templadores).trim() !== "")
+                                  ? "border-green-400"
+                                  : ""
                               )}
-                              value={v.templadores !== undefined ? v.templadores : (typeof l.templadores === "number" ? l.templadores : "")}
+                              value={v.templadores !== undefined ? v.templadores : typeof l.templadores === "number" ? l.templadores : ""}
                               onChange={(e) => setField(l.id, "templadores", e.target.value)}
                             />
                             <input
@@ -782,9 +804,11 @@ export default function LiquidacionMaterialesPage() {
                               className={cls(
                                 "border rounded px-2 py-1",
                                 (typeof l.hebillas === "number" && v.hebillas === undefined) ||
-                                (v.hebillas !== undefined && String(v.hebillas).trim() !== "") ? "border-green-400" : ""
+                                  (v.hebillas !== undefined && String(v.hebillas).trim() !== "")
+                                  ? "border-green-400"
+                                  : ""
                               )}
-                              value={v.hebillas !== undefined ? v.hebillas : (typeof l.hebillas === "number" ? l.hebillas : "")}
+                              value={v.hebillas !== undefined ? v.hebillas : typeof l.hebillas === "number" ? l.hebillas : ""}
                               onChange={(e) => setField(l.id, "hebillas", e.target.value)}
                             />
                             <input
@@ -794,9 +818,11 @@ export default function LiquidacionMaterialesPage() {
                               className={cls(
                                 "border rounded px-2 py-1",
                                 (typeof l.clevis === "number" && v.clevis === undefined) ||
-                                (v.clevis !== undefined && String(v.clevis).trim() !== "") ? "border-green-400" : ""
+                                  (v.clevis !== undefined && String(v.clevis).trim() !== "")
+                                  ? "border-green-400"
+                                  : ""
                               )}
-                              value={v.clevis !== undefined ? v.clevis : (typeof l.clevis === "number" ? l.clevis : "")}
+                              value={v.clevis !== undefined ? v.clevis : typeof l.clevis === "number" ? l.clevis : ""}
                               onChange={(e) => setField(l.id, "clevis", e.target.value)}
                             />
                           </>
