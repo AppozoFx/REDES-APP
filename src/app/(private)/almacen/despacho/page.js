@@ -287,6 +287,10 @@ export default function Despacho() {
     hebillas: 0,
     cinta_bandi: 0,
     caja_grapas: 0,
+    precon_50: 0,
+    precon_100: 0,
+    precon_150: 0,
+    precon_200: 0,
   });
 
   // Bobinas
@@ -764,6 +768,7 @@ if (lowMaterials.length > 0 || lowEquipTypes.length > 0) {
           actas: 0, conectores: 0, rosetas: 0, acopladores: 0, patchcord: 0, pachcord: 0,
           cintillos_30: 0, cintillos_10: 0, cintillos_bandera: 0, cinta_aislante: 0,
           templadores: 0, anclajes_tipo_p: 0, clevis: 0, hebillas: 0, cinta_bandi: 0, caja_grapas: 0,
+          precon_50: 0, precon_100: 0, precon_150: 0, precon_200: 0,
         });
         setDrumps([]);
         setDrumpInput("");
