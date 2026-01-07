@@ -1260,19 +1260,26 @@ const borrarFotoAuditoriaSiExiste = async (equipo) => {
                 <td className="p-2">{e.equipo}</td>
 
                 <td className="p-2">
-                  <Input
-                    value={editing[e.id]?.caso ?? e.caso ?? ""}
-                    onChange={(ev) => handleChange(e.id, "caso", ev.target.value)}
-                    disabled={editandoId !== e.id}
-                  />
+                  {editandoId === e.id ? (
+  <Input
+    value={editing[e.id]?.caso ?? e.caso ?? ""}
+    onChange={(ev) => handleChange(e.id, "caso", ev.target.value)}
+  />
+) : (
+  <span>{e.caso ?? ""}</span>
+)}
+
                 </td>
 
                 <td className="p-2">
-                  <Input
-                    value={editing[e.id]?.observacion ?? e.observacion ?? ""}
-                    onChange={(ev) => handleChange(e.id, "observacion", ev.target.value)}
-                    disabled={editandoId !== e.id}
-                  />
+                  {editandoId === e.id ? (
+  <Input
+    value={editing[e.id]?.observacion ?? e.observacion ?? ""}   
+    onChange={(ev) => handleChange(e.id, "observacion", ev.target.value)}
+  />
+) : (
+  <span>{e.observacion ?? ""}</span>
+)}
                 </td>
 
                 {["pri-tec", "tec-liq", "inv"].map((key) => (

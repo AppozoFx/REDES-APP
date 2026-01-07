@@ -3,7 +3,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { db } from "@/firebaseConfig";
-import { collection, getDocs } from "firebase/firestore";
+import { collection, getDocs, query, where } from "firebase/firestore";
 import dayjs from "dayjs";
 
 /* ====== Constantes ====== */
@@ -77,18 +77,26 @@ export default function DashboardStockPro(){
   const [busquedaSerie, setBusquedaSerie] = useState("");
 
   useEffect(()=>{ (async ()=>{
-    const [snapEq, snapCq, snapUs] = await Promise.all([
-      getDocs(collection(db,"equipos")),
-      getDocs(collection(db,"cuadrillas")),
-      getDocs(collection(db,"usuarios")),
-    ]);
-    setEquipos(snapEq.docs.map(d=>({id:d.id,...d.data()})));
-    setCuadrillas(snapCq.docs.map(d=>({id:d.id,...d.data()})));
-    setUsuarios(snapUs.docs.map(d=>{
-      const x=d.data();
-      return {id:d.id, uid:x.uid||d.id, nombres:x.nombres||x.nombre||"", apellidos:x.apellidos||""};
-    }));
-  })(); },[]);
+  const [snapCq, snapUs, snapCampo, snapAlmacen] = await Promise.all([
+    getDocs(collection(db,"cuadrillas")),
+    getDocs(collection(db,"usuarios")),
+    getDocs(query(collection(db,"equipos"), where("estado","==","campo"))),
+    getDocs(query(collection(db,"equipos"), where("estado","==","almacen"))),
+  ]);
+
+  // cuadrillas / usuarios igual
+  setCuadrillas(snapCq.docs.map(d=>({id:d.id,...d.data()})));
+  setUsuarios(snapUs.docs.map(d=>{
+    const x=d.data();
+    return {id:d.id, uid:x.uid||d.id, nombres:x.nombres||x.nombre||"", apellidos:x.apellidos||""};
+  }));
+
+  // equipos: une ambos (misma lógica final: equipos contiene lo que necesitas)
+  const campo = snapCampo.docs.map(d=>({id:d.id,...d.data()}));
+  const almacen = snapAlmacen.docs.map(d=>({id:d.id,...d.data()}));
+  setEquipos([...campo, ...almacen]);
+})(); },[]);
+
 
   /* índices */
   const usuariosIdx = useMemo(()=>{ const m=new Map(); for (const u of usuarios) m.set(u.uid||u.id, `${u.nombres||""} ${u.apellidos||""}`.trim()); return m; },[usuarios]);
@@ -196,33 +204,42 @@ export default function DashboardStockPro(){
   },[seleccionDetalle, equipos, metaPorNombre, usuariosIdx]);
 
   /* Series en almacén (EXCLUYENDO robo/perdida/averia/garantia) */
-  const seriesAlmacen = useMemo(()=>{
-    let items = equipos.filter(eq => 
-      eq.estado === "almacen" &&
-      !isExcludedUbicacion(eq.ubicacion)
-    );
-    if (equipoFiltro !== "todos") items = items.filter(eq => eq.equipo === equipoFiltro);
-    if (busquedaSerie.trim()){
-      const q = busquedaSerie.toLowerCase();
-      items = items.filter(eq =>
-        String(eq.SN||"").toLowerCase().includes(q) ||
-        String(eq.descripcion||"").toLowerCase().includes(q) ||
-        String(eq.guia_ingreso||eq.guiaIngreso||eq.guia?.numero||"").toLowerCase().includes(q)
-      );
+  const seriesAlmacen = useMemo(() => {
+  const totales = { ONT:0, MESH:0, FONO:0, BOX:0 };
+  const q = busquedaSerie.trim().toLowerCase();
+  const filtrar = !!q;
+
+  const rows = [];
+  for (const eq of equipos) {
+    if (eq.estado !== "almacen") continue;
+    if (isExcludedUbicacion(eq.ubicacion)) continue;
+    if (equipoFiltro !== "todos" && eq.equipo !== equipoFiltro) continue;
+
+    if (filtrar) {
+      const sn = String(eq.SN||"").toLowerCase();
+      const des = String(eq.descripcion||"").toLowerCase();
+      const guia = String(eq.guia_ingreso||eq.guiaIngreso||eq.guia?.numero||"").toLowerCase();
+      if (!sn.includes(q) && !des.includes(q) && !guia.includes(q)) continue;
     }
-    const rows = items.map(eq=>({
+
+    if (TIPOS.includes(eq.equipo)) totales[eq.equipo]++;
+
+    rows.push({
       id: eq.id,
       SN: eq.SN || "—",
       equipo: eq.equipo || "—",
-      fechaIngreso: eq.f_ingreso?.seconds ? dayjs(eq.f_ingreso.seconds*1000).format("DD/MM/YYYY")
-                    : (typeof eq.f_ingreso === "string" ? eq.f_ingreso : "—"),
+      fechaIngreso: eq.f_ingreso?.seconds
+        ? dayjs(eq.f_ingreso.seconds*1000).format("DD/MM/YYYY")
+        : (typeof eq.f_ingreso === "string" ? eq.f_ingreso : "—"),
       guiaIngreso: eq.guia_ingreso ?? eq.guiaIngreso ?? (typeof eq.guia?.numero === "string" ? eq.guia.numero : undefined) ?? "—",
-    }))
-    .sort((a,b)=> a.equipo.localeCompare(b.equipo) || a.SN.localeCompare(b.SN));
+    });
+  }
 
-    const totales = TIPOS.reduce((acc,t)=>{ acc[t]=rows.filter(r=>r.equipo===t).length; return acc; },{});
-    return { rows, totales, total: rows.length };
-  },[equipos, equipoFiltro, busquedaSerie]);
+  rows.sort((a,b)=> a.equipo.localeCompare(b.equipo) || a.SN.localeCompare(b.SN));
+  const total = rows.length;
+  return { rows, totales, total };
+}, [equipos, equipoFiltro, busquedaSerie]);
+
 
   /* ---- Botón Limpiar filtros ---- */
   const filtersDirty = useMemo(
