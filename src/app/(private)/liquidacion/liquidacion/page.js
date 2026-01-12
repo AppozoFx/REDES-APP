@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { db } from "@/firebaseConfig";
-import { collection, getDocs, updateDoc, doc } from "firebase/firestore";
+import { collection, getDocs, updateDoc, doc, query, where, orderBy, limit } from "firebase/firestore";
 import dayjs from "dayjs";
 import customParseFormat from "dayjs/plugin/customParseFormat";
 import "dayjs/locale/es";
@@ -54,9 +54,13 @@ const groupOrder = (tipo) => (tipo === "RESIDENCIAL" ? 0 : 1);
 const convertirAFecha = (valor) => {
   if (!valor) return null;
   if (typeof valor?.toDate === "function") return valor.toDate();
+  // ISO directo (lo que tienes en Firestore)
+  if (typeof valor === "string" && valor.includes("T")) return new Date(valor);
+
   const parseada = dayjs(valor, "D [de] MMMM [de] YYYY, h:mm:ss A [UTC-5]", "es", true);
   return parseada.isValid() ? parseada.toDate() : new Date(valor);
 };
+
 
 const formatearFecha = (fecha) => (fecha ? dayjs(fecha).format("DD/MM/YYYY") : "-");
 
@@ -154,7 +158,33 @@ export default function LiquidacionesPage() {
   setCargando(true);
   try {
     const ref = collection(db, "liquidacion_instalaciones");
-    const snapshot = await getDocs(ref);
+
+    // Rango del mes seleccionado (YYYY-MM)
+    const start = dayjs(filtros.mes + "-01").startOf("month").toISOString();
+    const end   = dayjs(filtros.mes + "-01").add(1, "month").startOf("month").toISOString();
+
+    // Si eliges un día, hacemos rango de ese día (más rápido aún) sin cambiar tu lógica
+    const qBase = filtros.dia
+      ? (() => {
+          const d0 = dayjs(filtros.dia).startOf("day").toISOString();
+          const d1 = dayjs(filtros.dia).add(1, "day").startOf("day").toISOString();
+          return query(
+            ref,
+            where("fechaInstalacion", ">=", d0),
+            where("fechaInstalacion", "<", d1),
+            orderBy("fechaInstalacion", "asc"),
+            limit(5000)
+          );
+        })()
+      : query(
+          ref,
+          where("fechaInstalacion", ">=", start),
+          where("fechaInstalacion", "<", end),
+          orderBy("fechaInstalacion", "asc"),
+          limit(5000)
+        );
+
+    const snapshot = await getDocs(qBase);
     const data = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
     setLiquidaciones(data);
   } catch (e) {
@@ -162,9 +192,10 @@ export default function LiquidacionesPage() {
     toast.error("Error al obtener las liquidaciones");
   } finally {
     setCargando(false);
-    if (!keepPage) setPage(1); // ✅ no cambies de página cuando keepPage=true
+    if (!keepPage) setPage(1);
   }
 };
+
 
 
   /* =========================
