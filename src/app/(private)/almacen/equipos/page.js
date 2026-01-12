@@ -786,6 +786,7 @@ const borrarFotoAuditoriaSiExiste = async (equipo) => {
       Tecnicos: mostrarTecnicos(e),
       Ubicación: e.ubicacion,
       Equipo: e.equipo,
+      Descripción: e.descripcion || "",
       "F. Ingreso": parseFecha(e.f_ingreso),
       "F. Despacho": parseFecha(e.f_despacho),
       Cliente: e.cliente,
