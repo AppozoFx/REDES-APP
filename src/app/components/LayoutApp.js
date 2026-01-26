@@ -15,7 +15,7 @@ import {
   FileChartColumn, ChevronDown, Archive as IconoGrupoAlmacen, UsersRound as IconoGrupoAdministracion,
   DollarSign as IconoGrupoLiquidacion, Building as IconoGrupoInstalaciones, ListChecks as IconoGrupoAsistencia,
   Wrench as IconoGrupoConfiguracion, UploadCloud, Home,FileCheck2,
-  Boxes, ShieldCheck
+  Boxes, ShieldCheck, FileUp
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import Notificaciones from "@/app/components/Notificaciones";
@@ -262,6 +262,13 @@ export default function LayoutApp({ children }) {
       { href: "/admin/usuarios/nuevo", label: "Nuevo Usuario", icon: I(UserPlus), roles: ["Gerencia","TI"] },
       { href: "/admin/importar-instalaciones", label: "Importar Instalaciones", icon: I(TrafficCone), roles: ["Gerencia","TI","Gestor"] },
       { href: "/admin/importar-inconcert", label: "Importar INCONCERT", icon: I(TrafficCone), roles: ["Gerencia","TI"] },
+       // ✅ NUEVO
+    {
+      href: "/almacen/actas-subir",
+      label: "Subir Actas Servicio",
+      icon: I(FileUp),
+      roles: ["Gerencia","TI","Gestor"]
+    },
       { href: "/admin/comunicados", label: "Comunicados", icon: I(Archive), roles: ["Gerencia","TI"] },
       { href: "/gerencia/orden_compra", label: "Órden de Compra", icon: I(FileChartColumn), roles: ["Gerencia","TI"] },
       { href: "/gerencia/coordinadores", label: "Coordinadores", icon: I(Users), roles: ["Gerencia","TI"] }

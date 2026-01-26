@@ -1,0 +1,45 @@
+# Git
+.git
+.gitignore
+
+# Node / frontend (no se usan en Cloud Run)
+node_modules
+.next
+dist
+build
+out
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+venv/
+.env
+.env.*
+
+# Logs
+*.log
+
+# OS / Editor basura
+.DS_Store
+Thumbs.db
+.idea
+.vscode
+
+# Firebase / GCloud local
+.firebase
+.firebaserc
+gcloud-debug.log
+
+# PDFs locales / pruebas
+*.pdf
+test/
+tests/
+
+# Archivos grandes innecesarios
+*.zip
+*.tar
+*.gz

@@ -49,6 +49,9 @@ exports.exportarStockEquiposBI = exportarStockEquiposBI;
 
 
 
+
+
+
 // Si tienes otras funciones, impórtalas y expórtalas de manera similar
 // Ejemplo:
 // const otraFuncion = require("./otraCarpeta/otraFuncion");

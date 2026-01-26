@@ -2,7 +2,16 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { db } from "@/firebaseConfig";
-import { collection, getDocs, updateDoc, doc, writeBatch } from "firebase/firestore";
+import {
+  collection,
+  getDocs,
+  doc,
+  writeBatch,
+  // ✅ NUEVO
+  query,
+  where,
+  orderBy,
+} from "firebase/firestore";
 import dayjs from "dayjs";
 import customParseFormat from "dayjs/plugin/customParseFormat";
 import "dayjs/locale/es";
@@ -35,12 +44,7 @@ const useDebounce = (value, delay = 350) => {
 const convertirAFecha = (valor) => {
   if (!valor) return null;
   if (typeof valor?.toDate === "function") return valor.toDate();
-  const parseada = dayjs(
-    valor,
-    "D [de] MMMM [de] YYYY, h:mm:ss A [UTC-5]",
-    "es",
-    true
-  );
+  const parseada = dayjs(valor, "D [de] MMMM [de] YYYY, h:mm:ss A [UTC-5]", "es", true);
   return parseada.isValid() ? parseada.toDate() : new Date(valor);
 };
 const formatearFecha = (fecha) => (fecha ? dayjs(fecha).format("DD/MM/YYYY") : "-");
@@ -85,7 +89,7 @@ export default function LiquidacionDetallePage() {
       if (theadRef.current) {
         const kpiH = kpiRef.current?.getBoundingClientRect().height || 0;
         const currentTop = theadRef.current.getBoundingClientRect().top;
-        setHeadPinned(currentTop <= (kpiH + 0.5));
+        setHeadPinned(currentTop <= kpiH + 0.5);
       }
     };
     recalc();
@@ -109,7 +113,8 @@ export default function LiquidacionDetallePage() {
   }, []);
 
   useEffect(() => {
-    obtenerLiquidaciones();
+    obtenerLiquidaciones(filtros.mes);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filtros.mes]);
 
   const obtenerUsuarios = async () => {
@@ -134,17 +139,32 @@ export default function LiquidacionDetallePage() {
     }
   };
 
-  const obtenerLiquidaciones = async () => {
+  /**
+   * ✅ CAMBIO CLAVE:
+   * Traer SOLO el MES desde Firestore (evita saturación/timeout).
+   * Funciona porque fechaInstalacion es string ISO "YYYY-MM-DDTHH:mm:ss.sssZ".
+   */
+  const obtenerLiquidaciones = async (yyyyMM) => {
     setCargando(true);
     try {
+      const inicioISO = dayjs(`${yyyyMM}-01`).startOf("month").toISOString();
+      const finISO = dayjs(`${yyyyMM}-01`).add(1, "month").startOf("month").toISOString();
+
       const ref = collection(db, "liquidacion_instalaciones");
-      const snapshot = await getDocs(ref);
+      const q = query(
+        ref,
+        where("fechaInstalacion", ">=", inicioISO),
+        where("fechaInstalacion", "<", finISO),
+        orderBy("fechaInstalacion", "desc")
+      );
+
+      const snapshot = await getDocs(q);
       const data = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
       setLiquidaciones(data);
       setPage(1);
     } catch (e) {
       console.error(e);
-      toast.error("Error al obtener las liquidaciones");
+      toast.error(e?.message || "Error al obtener las liquidaciones");
     } finally {
       setCargando(false);
     }
@@ -161,7 +181,6 @@ export default function LiquidacionDetallePage() {
   }, [liquidaciones]);
 
   const opcionesCoordinador = useMemo(() => {
-    // Normaliza roles desde posibles campos y formatos y mantiene a quienes tengan "Coordinador"
     const hasRole = (u, target = "COORDINADOR") => {
       const tgt = String(target).toUpperCase();
       const bucket = new Set();
@@ -219,7 +238,6 @@ export default function LiquidacionDetallePage() {
       const coincideCuadrilla =
         filtros.cuadrilla.length > 0 ? filtros.cuadrilla.includes(l.cuadrillaNombre) : true;
 
-      // Modo desde el nombre de la cuadrilla
       const modo = /MOTO/i.test(l?.cuadrillaNombre || "")
         ? "MOTO"
         : /RESIDENCIAL/i.test(l?.cuadrillaNombre || "")
@@ -295,7 +313,8 @@ export default function LiquidacionDetallePage() {
       }
       await batch.commit();
       toast.success("Cambios guardados");
-      await obtenerLiquidaciones();
+      // ✅ recarga SOLO el mes actual (no todo)
+      await obtenerLiquidaciones(filtros.mes);
       setEdiciones({});
     } catch (e) {
       console.error(e);
@@ -314,7 +333,6 @@ export default function LiquidacionDetallePage() {
     const beforeUnload = (e) => {
       if (!hayCambios) return;
       e.preventDefault();
-      // Chrome exige asignar returnValue para mostrar el diálogo
       e.returnValue = "";
     };
     window.addEventListener("beforeunload", beforeUnload);
@@ -346,9 +364,6 @@ export default function LiquidacionDetallePage() {
       busqueda: "",
     });
     setPage(1);
-  };
-  const handleEdicionChange = (id, campo, valor) => {
-    setEdiciones((prev) => ({ ...prev, [id]: { ...prev[id], [campo]: valor } }));
   };
 
   return (
@@ -425,9 +440,7 @@ export default function LiquidacionDetallePage() {
             className="text-sm"
             placeholder="Seleccionar..."
             value={opcionesCuadrilla.filter((opt) => filtros.cuadrilla.includes(opt.value))}
-            onChange={(sel) =>
-              setFiltros((p) => ({ ...p, cuadrilla: (sel || []).map((s) => s.value) }))
-            }
+            onChange={(sel) => setFiltros((p) => ({ ...p, cuadrilla: (sel || []).map((s) => s.value) }))}
           />
         </div>
         <div className="flex flex-col">
@@ -439,9 +452,7 @@ export default function LiquidacionDetallePage() {
             className="text-sm"
             placeholder="Seleccionar..."
             value={opcionesCoordinador.filter((opt) => filtros.coordinador.includes(opt.value))}
-            onChange={(sel) =>
-              setFiltros((p) => ({ ...p, coordinador: (sel || []).map((s) => s.value) }))
-            }
+            onChange={(sel) => setFiltros((p) => ({ ...p, coordinador: (sel || []).map((s) => s.value) }))}
           />
         </div>
         <div className="flex flex-col">
@@ -459,9 +470,7 @@ export default function LiquidacionDetallePage() {
               { value: "MOTO", label: "MOTO" },
               { value: "RESIDENCIAL", label: "RESIDENCIAL" },
             ].filter((opt) => filtros.modoCuadrilla.includes(opt.value))}
-            onChange={(sel) =>
-              setFiltros((p) => ({ ...p, modoCuadrilla: (sel || []).map((s) => s.value) }))
-            }
+            onChange={(sel) => setFiltros((p) => ({ ...p, modoCuadrilla: (sel || []).map((s) => s.value) }))}
           />
         </div>
         <div className="flex flex-col">
@@ -533,7 +542,6 @@ export default function LiquidacionDetallePage() {
           </thead>
 
           <tbody>
-            {/* Espaciador cuando el thead está pegado */}
             {headPinned && (
               <tr aria-hidden>
                 <td colSpan={11} style={{ height: theadH }} />
@@ -567,7 +575,6 @@ export default function LiquidacionDetallePage() {
                     <tr key={l.id} className="hover:bg-gray-50 text-center">
                       <td className="border p-2">{formatearFecha(f)}</td>
 
-                      {/* Tipo Cuadrilla (editable) */}
                       <td className="border p-1">
                         <select
                           value={ediciones[l.id]?.tipoCuadrilla ?? l.tipoCuadrilla ?? ""}
@@ -580,19 +587,16 @@ export default function LiquidacionDetallePage() {
                           }
                         >
                           <option value="">-- Seleccionar --</option>
-                          {[...new Set(liquidaciones.map((z) => z.tipoCuadrilla).filter(Boolean))].map(
-                            (opt) => (
-                              <option key={opt} value={opt}>
-                                {opt}
-                              </option>
-                            )
-                          )}
+                          {[...new Set(liquidaciones.map((z) => z.tipoCuadrilla).filter(Boolean))].map((opt) => (
+                            <option key={opt} value={opt}>
+                              {opt}
+                            </option>
+                          ))}
                         </select>
                       </td>
 
                       <td className="border p-2">{l.cuadrillaNombre || "-"}</td>
 
-                      {/* Coordinador (editable con solo coordinadores) */}
                       <td className="border p-1 min-w-[220px]">
                         <Select
                           classNamePrefix="coord"
@@ -621,7 +625,6 @@ export default function LiquidacionDetallePage() {
                       <td className="border p-2">{l.codigoCliente || "-"}</td>
                       <td className="border p-2">{l.cliente || "-"}</td>
 
-                      {/* R/C editable */}
                       <td className="border p-1">
                         <select
                           value={ediciones[l.id]?.residencialCondominio ?? l.residencialCondominio ?? ""}
@@ -639,13 +642,10 @@ export default function LiquidacionDetallePage() {
                         </select>
                       </td>
 
-                      {/* Cat5e (no editable) */}
                       <td className="border p-2">{l.cat5e ?? 0}</td>
-
                       <td className="border p-2">{l.cat6 ?? 0}</td>
                       <td className="border p-2">{puntos}</td>
 
-                      {/* Observación editable */}
                       <td className="border p-1">
                         <input
                           type="text"
@@ -690,7 +690,11 @@ export default function LiquidacionDetallePage() {
           </span>
           <button
             className="px-3 py-1 rounded border bg-white disabled:opacity-40"
-            onClick={() => setPage((p) => Math.min(Math.max(1, Math.ceil(liquidacionesFiltradas.length / pageSize)), p + 1))}
+            onClick={() =>
+              setPage((p) =>
+                Math.min(Math.max(1, Math.ceil(liquidacionesFiltradas.length / pageSize)), p + 1)
+              )
+            }
             disabled={page >= Math.max(1, Math.ceil(liquidacionesFiltradas.length / pageSize))}
           >
             ▶
