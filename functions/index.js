@@ -48,6 +48,12 @@ const {
 exports.exportarStockEquiposBI = exportarStockEquiposBI;
 
 
+const { renombrarActaManual } = require("./dataManagement/renombrarActaManual");
+exports.renombrarActaManual = renombrarActaManual;
+
+
+
+
 
 
 
